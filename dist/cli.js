@@ -1,40 +1,17 @@
 #!/usr/bin/env node
-"use strict";
-var __create = Object.create;
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
 
 // src/cli.ts
-var import_commander = require("commander");
-var import_ora = __toESM(require("ora"));
-var import_chalk = __toESM(require("chalk"));
-var import_node_path2 = __toESM(require("path"));
-var import_node_os = __toESM(require("os"));
-var import_promises2 = __toESM(require("fs/promises"));
-var import_node_child_process = require("child_process");
+import { Command } from "commander";
+import ora from "ora";
+import chalk from "chalk";
+import path3 from "path";
+import os2 from "os";
+import fs2 from "fs/promises";
+import { spawn } from "child_process";
 
 // src/githubPartialSubtree.ts
-var import_node_path = __toESM(require("path"));
-var import_promises = __toESM(require("fs/promises"));
+import path from "path";
+import fs from "fs/promises";
 function createSemaphore(max) {
   let running = 0;
   const queue = [];
@@ -76,7 +53,7 @@ async function fetchTree(owner, repo, treeish, recursive = false) {
   return fetchJson(url);
 }
 async function ensureDirForFile(filePath) {
-  await import_promises.default.mkdir(import_node_path.default.dirname(filePath), { recursive: true });
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
 }
 async function downloadSampleViaGitHubSubtree(opts) {
   const { owner, repo, ref, sampleFolder, destDir } = opts;
@@ -94,7 +71,7 @@ async function downloadSampleViaGitHubSubtree(opts) {
   }
   const blobs = sample.tree.filter((t) => t.type === "blob");
   if (blobs.length === 0) throw new Error(`No files found in samples/${sampleFolder}`);
-  await import_promises.default.mkdir(destDir, { recursive: true });
+  await fs.mkdir(destDir, { recursive: true });
   const sem = createSemaphore(concurrency);
   let done = 0;
   await Promise.all(
@@ -106,15 +83,79 @@ async function downloadSampleViaGitHubSubtree(opts) {
         const res = await fetch(rawUrl);
         if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} for ${fullRepoPath}`);
         const bytes = new Uint8Array(await res.arrayBuffer());
-        const outPath = import_node_path.default.join(destDir, rel);
+        const outPath = path.join(destDir, rel);
         await ensureDirForFile(outPath);
-        await import_promises.default.writeFile(outPath, bytes);
+        await fs.writeFile(outPath, bytes);
         done++;
         opts.onProgress?.(done, blobs.length, fullRepoPath);
       })
     )
   );
 }
+
+// src/detectVersionManagers.ts
+import { access } from "fs/promises";
+import { spawnSync } from "child_process";
+import os from "os";
+import path2 from "path";
+async function exists(p) {
+  try {
+    await access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function which(cmd) {
+  const runner = process.platform === "win32" ? "where" : "command";
+  const args = process.platform === "win32" ? [cmd] : ["-v", cmd];
+  try {
+    const res = spawnSync(runner, args, { encoding: "utf8", shell: false });
+    if (res.status === 0) {
+      const out = (res.stdout || res.stderr || "").split(/\r?\n/).find(Boolean);
+      return out ? out.trim() : null;
+    }
+  } catch {
+  }
+  return null;
+}
+async function detectVersionManagers() {
+  const found = { nvmPosix: false, nvmPosixDir: null, nvmWindows: false, nvmWindowsPath: null, nvs: false, nvsPath: null };
+  if (process.env.NVM_DIR) {
+    found.nvmPosix = true;
+    found.nvmPosixDir = process.env.NVM_DIR;
+  } else {
+    const maybe = path2.join(os.homedir(), ".nvm");
+    if (await exists(maybe)) {
+      found.nvmPosix = true;
+      found.nvmPosixDir = maybe;
+    }
+  }
+  if (process.env.NVM_HOME || process.env.NVM_SYMLINK) {
+    found.nvmWindows = true;
+    found.nvmWindowsPath = process.env.NVM_HOME ?? process.env.NVM_SYMLINK ?? null;
+  } else {
+    const w = which(process.platform === "win32" ? "nvm.exe" : "nvm");
+    if (w) {
+      if (process.platform === "win32" || w.toLowerCase().endsWith("nvm.exe")) {
+        found.nvmWindows = true;
+        found.nvmWindowsPath = w;
+      }
+    }
+  }
+  if (process.env.NVS_HOME) {
+    found.nvs = true;
+    found.nvsPath = process.env.NVS_HOME;
+  } else {
+    const n = which("nvs");
+    if (n) {
+      found.nvs = true;
+      found.nvsPath = n;
+    }
+  }
+  return found;
+}
+var detectVersionManagers_default = detectVersionManagers;
 
 // src/cli.ts
 var DEFAULT_OWNER = "pnp";
@@ -127,7 +168,7 @@ function normalizeSampleArg(sample) {
 }
 async function pathExists(p) {
   try {
-    await import_promises2.default.access(p);
+    await fs2.access(p);
     return true;
   } catch {
     return false;
@@ -135,7 +176,7 @@ async function pathExists(p) {
 }
 async function isDirNonEmpty(p) {
   try {
-    const entries = await import_promises2.default.readdir(p);
+    const entries = await fs2.readdir(p);
     return entries.length > 0;
   } catch {
     return false;
@@ -143,7 +184,7 @@ async function isDirNonEmpty(p) {
 }
 async function run(cmd, args, opts = {}) {
   return new Promise((resolve, reject) => {
-    const child = (0, import_node_child_process.spawn)(cmd, args, {
+    const child = spawn(cmd, args, {
       cwd: opts.cwd,
       shell: false,
       windowsHide: true,
@@ -211,18 +252,18 @@ function assertMethod(m) {
   throw new Error(`Invalid --method "${m}". Use "auto", "git", or "api".`);
 }
 async function copyDir(src, dest) {
-  await import_promises2.default.mkdir(dest, { recursive: true });
-  const fsp = import_promises2.default;
+  await fs2.mkdir(dest, { recursive: true });
+  const fsp = fs2;
   if (typeof fsp.cp === "function") {
     await fsp.cp(src, dest, { recursive: true });
     return;
   }
-  const entries = await import_promises2.default.readdir(src, { withFileTypes: true });
+  const entries = await fs2.readdir(src, { withFileTypes: true });
   for (const e of entries) {
-    const s = import_node_path2.default.join(src, e.name);
-    const d = import_node_path2.default.join(dest, e.name);
+    const s = path3.join(src, e.name);
+    const d = path3.join(dest, e.name);
     if (e.isDirectory()) await copyDir(s, d);
-    else await import_promises2.default.copyFile(s, d);
+    else await fs2.copyFile(s, d);
   }
 }
 async function sparseCloneInto(args) {
@@ -245,22 +286,88 @@ async function sparseCloneInto(args) {
   });
   spinner && (spinner.text = `Checking out ${ref}\u2026`);
   await run("git", ["-C", repoDir, "checkout", "--detach", "FETCH_HEAD"], { verbose });
-  const srcSampleDir = import_node_path2.default.join(repoDir, "samples", sampleFolder);
+  const srcSampleDir = path3.join(repoDir, "samples", sampleFolder);
   if (!await pathExists(srcSampleDir) || !await isDirNonEmpty(srcSampleDir)) {
     throw new Error(`Sample not found or empty: ${owner}/${repo}@${ref} \u2192 samples/${sampleFolder}`);
   }
 }
 async function fetchSampleViaSparseGitExtract(args) {
   const { owner, repo, ref, sampleFolder, destDir, verbose, spinner } = args;
-  const tmpRoot = await import_promises2.default.mkdtemp(import_node_path2.default.join(import_node_os.default.tmpdir(), "spfx-sample-"));
-  const tmpRepoDir = import_node_path2.default.join(tmpRoot, "repo");
+  const tmpRoot = await fs2.mkdtemp(path3.join(os2.tmpdir(), "spfx-sample-"));
+  const tmpRepoDir = path3.join(tmpRoot, "repo");
   try {
     await sparseCloneInto({ owner, repo, ref, sampleFolder, repoDir: tmpRepoDir, verbose, spinner });
-    const srcSampleDir = import_node_path2.default.join(tmpRepoDir, "samples", sampleFolder);
+    const srcSampleDir = path3.join(tmpRepoDir, "samples", sampleFolder);
     spinner && (spinner.text = `Copying sample to ${destDir}\u2026`);
     await copyDir(srcSampleDir, destDir);
   } finally {
-    await import_promises2.default.rm(tmpRoot, { recursive: true, force: true }).catch(() => void 0);
+    await fs2.rm(tmpRoot, { recursive: true, force: true }).catch(() => void 0);
+  }
+}
+async function readNvmrc(root) {
+  const p = path3.join(root, ".nvmrc");
+  try {
+    const txt = await fs2.readFile(p, "utf8");
+    const v = txt.split(/\r?\n/)[0].trim();
+    return v || null;
+  } catch {
+    return null;
+  }
+}
+function parseNodeVersion(v) {
+  if (!v) return null;
+  const s = v.trim().replace(/^v/, "");
+  const parts = s.split(".").map((p) => Number(p || 0));
+  if (parts.some((n) => Number.isNaN(n))) return null;
+  return { major: parts[0] || 0, minor: parts[1] || 0, patch: parts[2] || 0 };
+}
+function nodeVersionGte(a, b) {
+  if (a.major !== b.major) return a.major > b.major;
+  if (a.minor !== b.minor) return a.minor > b.minor;
+  return a.patch >= b.patch;
+}
+function getCurrentNodeVersion() {
+  const v = process.version.replace(/^v/, "");
+  const parts = v.split(".").map((p) => Number(p));
+  if (parts.some((n) => Number.isNaN(n))) return null;
+  return { major: parts[0], minor: parts[1], patch: parts[2] };
+}
+async function maybePrintNvmrcAdvice(sampleRoot) {
+  const nvmrc = await readNvmrc(sampleRoot);
+  if (!nvmrc) return;
+  const required = parseNodeVersion(nvmrc);
+  const current = getCurrentNodeVersion();
+  if (!required || !current) return;
+  if (!nodeVersionGte(current, required)) {
+    console.log();
+    console.log(chalk.yellow(`This sample suggests Node ${nvmrc} (from .nvmrc).`));
+    console.log(chalk.yellow(`Your current Node is ${process.version}.`));
+    try {
+      const dm = await detectVersionManagers_default();
+      const choices = [];
+      if (dm.nvmPosix) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
+      if (dm.nvmWindows) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
+      if (dm.nvs) choices.push(`${chalk.yellow("nvs")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
+      if (choices.length === 0) {
+        console.log(chalk.yellow("Consider installing a Node version manager such as nvm, nvm-windows, or nvs."));
+      }
+      if (choices.length > 0) {
+        console.log();
+        console.log(chalk.yellow("You can switch to the required Node version with:"));
+      }
+      if (choices.length === 1) {
+        console.log(`  ${choices[0]}`);
+      } else if (choices.length > 1) {
+        console.log(`  ${choices[0]}`);
+        for (let i = 1; i < choices.length; i++) {
+          console.log(chalk.yellow("or:"));
+          console.log(`  ${choices[i]}`);
+        }
+      }
+      console.log();
+      console.log(chalk.yellow("Then:"));
+    } catch {
+    }
   }
 }
 function assertMode(m) {
@@ -268,7 +375,7 @@ function assertMode(m) {
   if (m === "extract" || m === "repo") return m;
   throw new Error(`Invalid --mode "${m}". Use "extract" or "repo".`);
 }
-var program = new import_commander.Command();
+var program = new Command();
 program.name("spfx-sample").description("Fetch a single sample folder from a large GitHub repo using git sparse-checkout (no full clone).").version("0.3.0");
 program.command("get").argument("<sample>", "Sample folder name, e.g. react-hello-world OR samples/react-hello-world").option("--owner <owner>", "GitHub org/user", DEFAULT_OWNER).option("--repo <repo>", "GitHub repository name", DEFAULT_REPO).option("--ref <ref>", "Git ref (branch, tag, or commit SHA)", DEFAULT_REF).option("--dest <dest>", "Destination folder (default varies by --mode)").option("--mode <mode>", 'Mode: "extract" (copy sample out) or "repo" (leave sparse repo)', "extract").option("--method <method>", 'Method: "auto" (git if available, else api), "git", or "api"', "auto").option("--force", "Overwrite destination if it exists", false).option("--verbose", "Print git output", false).action(async (sample, options) => {
   const sampleFolder = normalizeSampleArg(sample);
@@ -280,7 +387,7 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
   try {
     mode = assertMode(options.mode);
   } catch (e) {
-    console.error(import_chalk.default.red(e.message));
+    console.error(chalk.red(e.message));
     process.exitCode = 1;
     return;
   }
@@ -288,25 +395,25 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
   try {
     method = assertMethod(options.method);
   } catch (e) {
-    console.error(import_chalk.default.red(e.message));
+    console.error(chalk.red(e.message));
     process.exitCode = 1;
     return;
   }
   const defaultDest = mode === "extract" ? `./${sampleFolder}` : `./${repo}-${sampleFolder}`.replaceAll("/", "-");
-  const destDir = import_node_path2.default.resolve(options.dest ?? defaultDest);
+  const destDir = path3.resolve(options.dest ?? defaultDest);
   const gitAvailable = await isGitAvailable(verbose);
   const chosen = method === "auto" ? gitAvailable ? "git" : "api" : method;
   if (chosen === "git") {
     try {
       await ensureGit(verbose);
     } catch (e) {
-      console.error(import_chalk.default.red(e.message));
+      console.error(chalk.red(e.message));
       process.exitCode = 1;
       return;
     }
   }
   if (chosen === "api" && mode === "repo") {
-    console.error(import_chalk.default.red(`--mode repo requires --method git (API method cannot create a git working repo).`));
+    console.error(chalk.red(`--mode repo requires --method git (API method cannot create a git working repo).`));
     process.exitCode = 1;
     return;
   }
@@ -315,20 +422,20 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
       const nonEmpty = await isDirNonEmpty(destDir);
       if (nonEmpty) {
         console.error(
-          import_chalk.default.red(`Destination exists and is not empty: ${destDir}
-`) + import_chalk.default.yellow(`Use --force to overwrite (or choose --dest).`)
+          chalk.red(`Destination exists and is not empty: ${destDir}
+`) + chalk.yellow(`Use --force to overwrite (or choose --dest).`)
         );
         process.exitCode = 1;
         return;
       }
     } else {
-      await import_promises2.default.rm(destDir, { recursive: true, force: true });
+      await fs2.rm(destDir, { recursive: true, force: true });
     }
   }
-  const spinner = (0, import_ora.default)(`Getting sample ${sampleFolder} from ${owner}/${repo}@${ref}\u2026`).start();
+  const spinner = ora(`Getting sample ${sampleFolder} from ${owner}/${repo}@${ref}\u2026`).start();
   try {
     if (chosen === "api") {
-      await import_promises2.default.mkdir(destDir, { recursive: true });
+      await fs2.mkdir(destDir, { recursive: true });
       await downloadSampleViaGitHubSubtree({
         owner,
         repo,
@@ -341,14 +448,15 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
         }
       });
       spinner.succeed(
-        `Done! Downloaded ${import_chalk.default.cyan(`samples/${sampleFolder}`)} into ${import_chalk.default.green(destDir)}`
+        `Done! Downloaded ${chalk.cyan(`samples/${sampleFolder}`)} into ${chalk.green(destDir)}`
       );
       console.log();
-      console.log(import_chalk.default.green("Next steps:"));
-      console.log(import_chalk.default.yellow(`  cd "${destDir}"`));
-      console.log(import_chalk.default.yellow("  npm i"));
-      console.log(import_chalk.default.yellow("  npm run build"));
-      console.log(import_chalk.default.yellow("  npm run serve"));
+      console.log(chalk.green("Next steps:"));
+      console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
+      await maybePrintNvmrcAdvice(destDir);
+      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
+      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
+      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
       return;
     }
     if (mode === "extract") {
@@ -362,16 +470,17 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
         spinner
       });
       spinner.succeed(
-        `Done! Extracted ${import_chalk.default.cyan(`samples/${sampleFolder}`)} into ${import_chalk.default.green(destDir)}`
+        `Done! Extracted ${chalk.cyan(`samples/${sampleFolder}`)} into ${chalk.green(destDir)}`
       );
       console.log();
-      console.log(import_chalk.default.green("Next steps:"));
-      console.log(import_chalk.default.yellow(`  cd "${destDir}"`));
-      console.log(import_chalk.default.yellow("  npm i"));
-      console.log(import_chalk.default.yellow("  npm run build"));
-      console.log(import_chalk.default.yellow("  npm run serve"));
+      console.log(chalk.green("Next steps:"));
+      console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
+      await maybePrintNvmrcAdvice(destDir);
+      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
+      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
+      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
     } else {
-      await import_promises2.default.mkdir(destDir, { recursive: true });
+      await fs2.mkdir(destDir, { recursive: true });
       await sparseCloneInto({
         owner,
         repo,
@@ -381,21 +490,21 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
         verbose,
         spinner
       });
-      const samplePath = import_node_path2.default.join(destDir, "samples", sampleFolder);
+      const samplePath = path3.join(destDir, "samples", sampleFolder);
       spinner.succeed(
-        `Done! Sparse repo ready at ${import_chalk.default.green(destDir)} (sample at ${import_chalk.default.cyan(samplePath)})`
+        `Done! Sparse repo ready at ${chalk.green(destDir)} (sample at ${chalk.cyan(samplePath)})`
       );
       console.log();
-      console.log(import_chalk.default.green("Next steps:"));
-      console.log(import_chalk.default.yellow(`  cd "${samplePath}"`));
-      console.log(import_chalk.default.yellow("  npm i"));
-      console.log(import_chalk.default.yellow("  npm run build"));
-      console.log(import_chalk.default.yellow("  npm run serve"));
+      console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${samplePath}"`)}`);
+      await maybePrintNvmrcAdvice(samplePath);
+      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
+      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
+      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
       console.log();
-      console.log(import_chalk.default.green("Contribute back:"));
-      console.log(import_chalk.default.yellow(`  cd "${destDir}"`));
-      console.log(import_chalk.default.yellow("  git status"));
-      console.log(import_chalk.default.yellow("  git checkout -b my-change"));
+      console.log(chalk.green("Contribute back:"));
+      console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
+      console.log(chalk.white(`  ${chalk.yellow("git")} ${chalk.white("status")}`));
+      console.log(chalk.white(`  ${chalk.yellow("git")} ${chalk.white("checkout")} ${chalk.gray("-b")} ${chalk.white("my-change")}`));
     }
   } catch (err) {
     spinner.fail(err.message);

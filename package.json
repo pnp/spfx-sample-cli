@@ -3,7 +3,6 @@
   "version": "0.0.0-development",
   "description": "Fetch a single SPFx sample folder from pnp/sp-dev-fx-webparts",
   "license": "MIT",
-  "type": "commonjs",
   "bin": {
     "spfx-sample": "dist/cli.js"
   },
@@ -12,14 +11,18 @@
     "README.md",
     "LICENSE"
   ],
-  "engines": {
-    "node": ">=18"
-  },
+
   "publishConfig": {
     "access": "public"
   },
+  "type": "module",
+
+  "engines": {
+    "node": ">=20"
+  },
+
   "scripts": {
-    "build": "tsup src/cli.ts --format cjs --target node18 --sourcemap --clean",
+    "build": "tsup src/cli.ts --format esm --target node18 --sourcemap --clean",
     "dev": "node dist/cli.js",
     "prepublishOnly": "npm run build",
     "release": "semantic-release",

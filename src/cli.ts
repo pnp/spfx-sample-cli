@@ -8,6 +8,7 @@ import os from "node:os";
 import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { downloadSampleViaGitHubSubtree } from "./githubPartialSubtree";
+import detectVersionManagers from "./detectVersionManagers";
 import type { CliOptions, Mode, Method } from "./cliOptions";
 
 
@@ -223,6 +224,91 @@ async function fetchSampleViaSparseGitExtract(args: {
     }
 }
 
+async function readNvmrc(root: string): Promise<string | null> {
+    const p = path.join(root, '.nvmrc');
+    try {
+        const txt = await fs.readFile(p, 'utf8');
+        const v = txt.split(/\r?\n/)[0].trim();
+        return v || null;
+    } catch {
+        return null;
+    }
+}
+
+function parseNodeVersion(v: string | null): { major: number; minor: number; patch: number } | null {
+    if (!v) return null;
+    // Allow forms like: 14, 14.17, 14.17.0, v14.17.0
+    const s = v.trim().replace(/^v/, '');
+    const parts = s.split('.').map((p) => Number(p || 0));
+    if (parts.some((n) => Number.isNaN(n))) return null;
+    return { major: parts[0] || 0, minor: parts[1] || 0, patch: parts[2] || 0 };
+}
+
+function nodeVersionGte(a: { major: number; minor: number; patch: number }, b: { major: number; minor: number; patch: number }): boolean {
+    if (a.major !== b.major) return a.major > b.major;
+    if (a.minor !== b.minor) return a.minor > b.minor;
+    return a.patch >= b.patch;
+}
+
+function getCurrentNodeVersion(): { major: number; minor: number; patch: number } | null {
+    const v = process.version.replace(/^v/, '');
+    const parts = v.split('.').map((p) => Number(p));
+    if (parts.some((n) => Number.isNaN(n))) return null;
+    return { major: parts[0], minor: parts[1], patch: parts[2] };
+}
+
+async function maybePrintNvmrcAdvice(sampleRoot: string): Promise<void> {
+    const nvmrc = await readNvmrc(sampleRoot);
+    if (!nvmrc) return;
+
+    const required = parseNodeVersion(nvmrc);
+    const current = getCurrentNodeVersion();
+
+
+    if (!required || !current) return;
+
+    if (!nodeVersionGte(current, required)) {
+        console.log();
+        console.log(chalk.yellow(`This sample suggests Node ${nvmrc} (from .nvmrc).`));
+        console.log(chalk.yellow(`Your current Node is ${process.version}.`));
+  
+
+        // Helpful hint: detect common node version managers
+        try {
+            const dm = await detectVersionManagers();
+            const choices: string[] = [];
+            if (dm.nvmPosix) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
+            if (dm.nvmWindows) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
+            if (dm.nvs) choices.push(`${chalk.yellow("nvs")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
+
+
+            if (choices.length === 0) {
+                console.log(chalk.yellow("Consider installing a Node version manager such as nvm, nvm-windows, or nvs."));
+            }
+            if (choices.length > 0) {
+                console.log();
+                console.log(chalk.yellow("You can switch to the required Node version with:"));
+            }
+            if (choices.length === 1) {
+                console.log(`  ${choices[0]}`);
+            } else if (choices.length > 1) {
+                console.log(`  ${choices[0]}`);
+                for (let i = 1; i < choices.length; i++) {
+                    console.log(chalk.yellow("or:"));
+                    console.log(`  ${choices[i]}`);
+                }
+
+            }
+            
+                console.log();
+                console.log(chalk.yellow("Then:"));
+            
+        } catch {
+            // ignore detection failures
+        }
+    }
+}
+
 function assertMode(m: string | undefined): Mode {
     if (!m) return "extract";
     if (m === "extract" || m === "repo") return m;
@@ -345,10 +431,11 @@ program
 
                 console.log();
                 console.log(chalk.green("Next steps:"));
-                console.log(chalk.yellow(`  cd "${destDir}"`));
-                console.log(chalk.yellow("  npm i"));
-                console.log(chalk.yellow("  npm run build"));
-                console.log(chalk.yellow("  npm run serve"));
+                console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
+                await maybePrintNvmrcAdvice(destDir);
+                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
+                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
+                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
                 return;
             }
 
@@ -370,10 +457,12 @@ program
 
                 console.log();
                 console.log(chalk.green("Next steps:"));
-                console.log(chalk.yellow(`  cd "${destDir}"`));
-                console.log(chalk.yellow("  npm i"));
-                console.log(chalk.yellow("  npm run build"));
-                console.log(chalk.yellow("  npm run serve"));
+                console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
+                await maybePrintNvmrcAdvice(destDir);
+                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
+                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
+                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+
             } else {
                 // repo mode: sparse clone directly into destDir and keep .git there
                 await fs.mkdir(destDir, { recursive: true });
@@ -395,16 +484,17 @@ program
                 );
 
                 console.log();
-                console.log(chalk.green("Next steps:"));
-                console.log(chalk.yellow(`  cd "${samplePath}"`));
-                console.log(chalk.yellow("  npm i"));
-                console.log(chalk.yellow("  npm run build"));
-                console.log(chalk.yellow("  npm run serve"));
+                console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${samplePath}"`)}`);
+                await maybePrintNvmrcAdvice(samplePath);
+                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
+                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
+                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
                 console.log();
                 console.log(chalk.green("Contribute back:"));
-                console.log(chalk.yellow(`  cd "${destDir}"`));
-                console.log(chalk.yellow("  git status"));
-                console.log(chalk.yellow("  git checkout -b my-change"));
+                console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
+
+                console.log(chalk.white(`  ${chalk.yellow("git")} ${chalk.white("status")}`));
+                console.log(chalk.white(`  ${chalk.yellow("git")} ${chalk.white("checkout")} ${chalk.gray("-b")} ${chalk.white("my-change")}`));
             }
         } catch (err) {
             spinner.fail((err as Error).message);
