@@ -1,0 +1,55 @@
+{
+  "name": "@pnp/spfx-sample",
+  "version": "0.0.0-development",
+  "description": "Fetch a single SPFx sample folder from pnp/sp-dev-fx-webparts",
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "spfx-sample": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup src/cli.ts --format cjs --target node18 --sourcemap --clean",
+    "dev": "node dist/cli.js",
+    "prepublishOnly": "npm run build",
+    "release": "semantic-release",
+    "release:dry": "semantic-release --dry-run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pnp/spfx-sample-cli.git"
+  },
+  "keywords": [],
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/pnp/spfx-sample-cli/issues"
+  },
+  "homepage": "https://github.com/pnp/spfx-sample-cli#readme",
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "commander": "^14.0.2",
+    "ora": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "semantic-release": "^24.0.0",
+    "@semantic-release/commit-analyzer": "^13.0.0",
+    "@semantic-release/release-notes-generator": "^14.0.0",
+    "@semantic-release/changelog": "^6.0.0",
+    "@semantic-release/npm": "^12.0.0",
+    "@semantic-release/github": "^11.0.0",
+    "@semantic-release/git": "^10.0.0"
+  }
+}
