@@ -4,7 +4,7 @@
 import { Command } from "commander";
 import ora from "ora";
 import chalk from "chalk";
-import path3 from "path";
+import path4 from "path";
 import os2 from "os";
 import fs2 from "fs/promises";
 import { spawn } from "child_process";
@@ -157,6 +157,37 @@ async function detectVersionManagers() {
 }
 var detectVersionManagers_default = detectVersionManagers;
 
+// src/detectServeCommand.ts
+import { readFile } from "fs/promises";
+import path3 from "path";
+async function detectServeCommand(projectDir) {
+  const pkgPath = path3.join(projectDir, "package.json");
+  try {
+    const txt = await readFile(pkgPath, "utf8");
+    const pkg = JSON.parse(txt);
+    if (pkg.scripts) {
+      if (pkg.scripts.start) return { cmd: "npm", args: ["run", "start"] };
+      if (pkg.scripts.serve) return { cmd: "npm", args: ["run", "serve"] };
+    }
+    const deps = { ...pkg.dependencies || {}, ...pkg.devDependencies || {} };
+    if (deps.heft || deps["@microsoft/heft"]) {
+      return { cmd: "npm", args: ["run", "start"] };
+    }
+    if (deps.gulp || deps["gulp-cli"]) {
+      return { cmd: "gulp", args: ["serve"] };
+    }
+  } catch {
+  }
+  try {
+    const gf = path3.join(projectDir, "gulpfile.js");
+    await readFile(gf, "utf8");
+    return { cmd: "gulp", args: ["serve"] };
+  } catch {
+  }
+  return { cmd: "npm", args: ["run", "serve"] };
+}
+var detectServeCommand_default = detectServeCommand;
+
 // src/cli.ts
 var DEFAULT_OWNER = "pnp";
 var DEFAULT_REPO = "sp-dev-fx-webparts";
@@ -260,8 +291,8 @@ async function copyDir(src, dest) {
   }
   const entries = await fs2.readdir(src, { withFileTypes: true });
   for (const e of entries) {
-    const s = path3.join(src, e.name);
-    const d = path3.join(dest, e.name);
+    const s = path4.join(src, e.name);
+    const d = path4.join(dest, e.name);
     if (e.isDirectory()) await copyDir(s, d);
     else await fs2.copyFile(s, d);
   }
@@ -286,18 +317,18 @@ async function sparseCloneInto(args) {
   });
   spinner && (spinner.text = `Checking out ${ref}\u2026`);
   await run("git", ["-C", repoDir, "checkout", "--detach", "FETCH_HEAD"], { verbose });
-  const srcSampleDir = path3.join(repoDir, "samples", sampleFolder);
+  const srcSampleDir = path4.join(repoDir, "samples", sampleFolder);
   if (!await pathExists(srcSampleDir) || !await isDirNonEmpty(srcSampleDir)) {
     throw new Error(`Sample not found or empty: ${owner}/${repo}@${ref} \u2192 samples/${sampleFolder}`);
   }
 }
 async function fetchSampleViaSparseGitExtract(args) {
   const { owner, repo, ref, sampleFolder, destDir, verbose, spinner } = args;
-  const tmpRoot = await fs2.mkdtemp(path3.join(os2.tmpdir(), "spfx-sample-"));
-  const tmpRepoDir = path3.join(tmpRoot, "repo");
+  const tmpRoot = await fs2.mkdtemp(path4.join(os2.tmpdir(), "spfx-sample-"));
+  const tmpRepoDir = path4.join(tmpRoot, "repo");
   try {
     await sparseCloneInto({ owner, repo, ref, sampleFolder, repoDir: tmpRepoDir, verbose, spinner });
-    const srcSampleDir = path3.join(tmpRepoDir, "samples", sampleFolder);
+    const srcSampleDir = path4.join(tmpRepoDir, "samples", sampleFolder);
     spinner && (spinner.text = `Copying sample to ${destDir}\u2026`);
     await copyDir(srcSampleDir, destDir);
   } finally {
@@ -305,7 +336,7 @@ async function fetchSampleViaSparseGitExtract(args) {
   }
 }
 async function readNvmrc(root) {
-  const p = path3.join(root, ".nvmrc");
+  const p = path4.join(root, ".nvmrc");
   try {
     const txt = await fs2.readFile(p, "utf8");
     const v = txt.split(/\r?\n/)[0].trim();
@@ -400,7 +431,7 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
     return;
   }
   const defaultDest = mode === "extract" ? `./${sampleFolder}` : `./${repo}-${sampleFolder}`.replaceAll("/", "-");
-  const destDir = path3.resolve(options.dest ?? defaultDest);
+  const destDir = path4.resolve(options.dest ?? defaultDest);
   const gitAvailable = await isGitAvailable(verbose);
   const chosen = method === "auto" ? gitAvailable ? "git" : "api" : method;
   if (chosen === "git") {
@@ -455,8 +486,12 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
       console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
       await maybePrintNvmrcAdvice(destDir);
       console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
-      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
-      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+      try {
+        const serve = await detectServeCommand_default(destDir);
+        console.log(chalk.white(`  ${chalk.yellow(serve.cmd)} ${chalk.white(serve.args?.join(" ") ?? "")}`));
+      } catch {
+        console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+      }
       return;
     }
     if (mode === "extract") {
@@ -477,8 +512,12 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
       console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
       await maybePrintNvmrcAdvice(destDir);
       console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
-      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
-      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+      try {
+        const serve = await detectServeCommand_default(destDir);
+        console.log(chalk.white(`  ${chalk.yellow(serve.cmd)} ${chalk.white(serve.args?.join(" ") ?? "")}`));
+      } catch {
+        console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+      }
     } else {
       await fs2.mkdir(destDir, { recursive: true });
       await sparseCloneInto({
@@ -490,7 +529,7 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
         verbose,
         spinner
       });
-      const samplePath = path3.join(destDir, "samples", sampleFolder);
+      const samplePath = path4.join(destDir, "samples", sampleFolder);
       spinner.succeed(
         `Done! Sparse repo ready at ${chalk.green(destDir)} (sample at ${chalk.cyan(samplePath)})`
       );
@@ -498,8 +537,12 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
       console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${samplePath}"`)}`);
       await maybePrintNvmrcAdvice(samplePath);
       console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
-      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
-      console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+      try {
+        const serve = await detectServeCommand_default(samplePath);
+        console.log(chalk.white(`  ${chalk.yellow(serve.cmd)} ${chalk.white(serve.args?.join(" ") ?? "")}`));
+      } catch {
+        console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+      }
       console.log();
       console.log(chalk.green("Contribute back:"));
       console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);

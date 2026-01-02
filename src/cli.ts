@@ -9,6 +9,7 @@ import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { downloadSampleViaGitHubSubtree } from "./githubPartialSubtree";
 import detectVersionManagers from "./detectVersionManagers";
+import detectServeCommand from "./detectServeCommand";
 import type { CliOptions, Mode, Method } from "./cliOptions";
 
 
@@ -434,8 +435,12 @@ program
                 console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
                 await maybePrintNvmrcAdvice(destDir);
                 console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
-                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
-                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+                try {
+                    const serve = await detectServeCommand(destDir);
+                    console.log(chalk.white(`  ${chalk.yellow(serve.cmd)} ${chalk.white(serve.args?.join(" ") ?? "")}`));
+                } catch {
+                    console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+                }
                 return;
             }
 
@@ -460,8 +465,12 @@ program
                 console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
                 await maybePrintNvmrcAdvice(destDir);
                 console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
-                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
-                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+                try {
+                    const serve = await detectServeCommand(destDir);
+                    console.log(chalk.white(`  ${chalk.yellow(serve.cmd)} ${chalk.white(serve.args?.join(" ") ?? "")}`));
+                } catch {
+                    console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+                }
 
             } else {
                 // repo mode: sparse clone directly into destDir and keep .git there
@@ -487,8 +496,12 @@ program
                 console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${samplePath}"`)}`);
                 await maybePrintNvmrcAdvice(samplePath);
                 console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
-                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
-                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+                try {
+                    const serve = await detectServeCommand(samplePath);
+                    console.log(chalk.white(`  ${chalk.yellow(serve.cmd)} ${chalk.white(serve.args?.join(" ") ?? "")}`));
+                } catch {
+                    console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+                }
                 console.log();
                 console.log(chalk.green("Contribute back:"));
                 console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
