@@ -10,4 +10,14 @@ export type CliOptions = {
     verbose?: boolean;
     mode?: Mode;
     method?: Method;
+
+    /** New project/package name to apply after download */
+    rename?: string;
+
+    /**
+     * If passed with a value: use that GUID.
+     * If passed without a value: generate a GUID.
+     * If omitted: do nothing.
+     */
+    newid?: string | boolean;
 };

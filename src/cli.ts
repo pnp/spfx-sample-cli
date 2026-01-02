@@ -7,6 +7,8 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+
 import { downloadSampleViaGitHubSubtree } from "./githubPartialSubtree";
 import detectVersionManagers from "./detectVersionManagers";
 import detectServeCommand from "./detectServeCommand";
@@ -310,11 +312,153 @@ async function maybePrintNvmrcAdvice(sampleRoot: string): Promise<void> {
     }
 }
 
+type FinalizeArgs = {
+    spinner?: ReturnType<typeof ora>;
+    successMessage: string;
+    projectPath: string; // directory where to run npm i / build / serve
+    repoRoot?: string; // when repo mode: top-level repo dir to show contribute back
+};
+
+async function finalizeExtraction(opts: FinalizeArgs): Promise<void> {
+    const { spinner, successMessage, projectPath, repoRoot } = opts;
+
+    spinner && spinner.succeed(successMessage);
+
+    // Place for additional post-extract logic (user requested hook)
+    // e.g. customize project files, run transforms, etc.
+
+    console.log();
+    console.log(chalk.green("Next steps:"));
+    console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${projectPath}"`)} `);
+    await maybePrintNvmrcAdvice(projectPath);
+    console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
+    console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
+    try {
+        const serve = await detectServeCommand(projectPath);
+        console.log(chalk.white(`  ${chalk.yellow(serve.cmd)} ${chalk.white(serve.args?.join(" ") ?? "")}`));
+    } catch {
+        console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+    }
+
+    if (repoRoot) {
+        console.log();
+        console.log(chalk.green("Contribute back:"));
+        console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${repoRoot}"`)} `);
+        console.log(chalk.white(`  ${chalk.yellow("git")} ${chalk.white("status")}`));
+        console.log(chalk.white(`  ${chalk.yellow("git")} ${chalk.white("checkout")} ${chalk.gray("-b")} ${chalk.white("my-change")}`));
+    }
+}
+
 function assertMode(m: string | undefined): Mode {
     if (!m) return "extract";
     if (m === "extract" || m === "repo") return m;
     throw new Error(`Invalid --mode "${m}". Use "extract" or "repo".`);
 }
+
+function isGuid(v: string): boolean {
+    // Accepts RFC4122-ish GUIDs (case-insensitive)
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+}
+
+async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
+    try {
+        const txt = await fs.readFile(filePath, "utf8");
+        return JSON.parse(txt) as T;
+    } catch {
+        return null;
+    }
+}
+
+async function writeJsonPretty(filePath: string, obj: unknown): Promise<void> {
+    await fs.writeFile(filePath, JSON.stringify(obj, null, 2) + "\n", "utf8");
+}
+
+async function renameSpfxProject(projectDir: string, opts: { rename?: string; newId?: string }): Promise<void> {
+    const pkgPath = path.join(projectDir, "package.json");
+    const pkg = await readJsonIfExists<any>(pkgPath);
+    const oldName: string | undefined = pkg?.name;
+
+    // package.json name
+    if (pkg && opts.rename) {
+        pkg.name = opts.rename;
+        await writeJsonPretty(pkgPath, pkg);
+    }
+
+    // .yo-rc.json: libraryName, solutionName, libraryId
+    const yoPath = path.join(projectDir, ".yo-rc.json");
+    const yo = await readJsonIfExists<any>(yoPath);
+    const gen = yo?.["@microsoft/generator-sharepoint"];
+    if (yo && gen) {
+        if (opts.rename) {
+            if (typeof gen.libraryName === "string") gen.libraryName = opts.rename;
+            if (typeof gen.solutionName === "string") gen.solutionName = opts.rename;
+        }
+        if (opts.newId && typeof gen.libraryId === "string") {
+            gen.libraryId = opts.newId;
+        }
+        await writeJsonPretty(yoPath, yo);
+    }
+
+    // config/package-solution.json: solution.name (string replace), solution.id
+    const psPath = path.join(projectDir, "config", "package-solution.json");
+    const ps = await readJsonIfExists<any>(psPath);
+    if (ps?.solution) {
+        if (opts.rename && typeof ps.solution.name === "string" && oldName) {
+            // match M365 CLI approach: replace occurrences of previous package name in the solution name
+            ps.solution.name = ps.solution.name.replace(new RegExp(oldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), opts.rename);
+        }
+        if (opts.newId && typeof ps.solution.id === "string") {
+            ps.solution.id = opts.newId;
+        }
+        await writeJsonPretty(psPath, ps);
+    }
+
+    // config/deploy-azure-storage.json (optional): container
+    const dazPath = path.join(projectDir, "config", "deploy-azure-storage.json");
+    const daz = await readJsonIfExists<any>(dazPath);
+    if (daz && opts.rename && typeof daz.container === "string") {
+        daz.container = opts.rename;
+        await writeJsonPretty(dazPath, daz);
+    }
+
+    // README.md (optional): string replace oldName -> newName
+    const readmePath = path.join(projectDir, "README.md");
+    if (opts.rename && oldName) {
+        try {
+            const existing = await fs.readFile(readmePath, "utf8");
+            const updated = existing.replace(new RegExp(oldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), opts.rename);
+            if (updated !== existing) {
+                await fs.writeFile(readmePath, updated, "utf8");
+            }
+        } catch {
+            // README doesn't exist in some samples; ignore
+        }
+    }
+}
+
+async function postProcessProject(projectPath: string, options: CliOptions, spinner?: ReturnType<typeof ora>): Promise<void> {
+    const rename = options.rename?.trim();
+    let newId: string | undefined;
+
+    if (options.newid) {
+        if (typeof options.newid === "string") {
+            const v = options.newid.trim();
+            if (!isGuid(v)) {
+                throw new Error(`--newid must be a GUID (or omit the value to auto-generate one). Received: ${v}`);
+            }
+            newId = v;
+        } else {
+            // flag was provided without a value
+            newId = randomUUID();
+        }
+    }
+
+    if (rename || newId) {
+        spinner && (spinner.text = `Updating project metadata${rename ? ` (rename → ${rename})` : ""}${newId ? " (new id)" : ""}…`);
+        await renameSpfxProject(projectPath, { rename, newId });
+    }
+}
+
 
 const program = new Command();
 
@@ -330,6 +474,8 @@ program
         .option("--repo <repo>", "GitHub repository name", DEFAULT_REPO)
         .option("--ref <ref>", "Git ref (branch, tag, or commit SHA)", DEFAULT_REF)
         .option("--dest <dest>", "Destination folder (default varies by --mode)")
+        .option("--rename <newName>", "Rename the downloaded SPFx project (package.json/.yo-rc.json/package-solution.json/README)")
+        .option("--newid [id]", "Generate or set a new SPFx solution id (GUID). If omitted value, a new GUID is generated.")
         .option("--mode <mode>", 'Mode: "extract" (copy sample out) or "repo" (leave sparse repo)', "extract")
         .option("--method <method>", 'Method: "auto" (git if available, else api), "git", or "api"', "auto")
         .option("--force", "Overwrite destination if it exists", false)
@@ -426,21 +572,12 @@ program
                     }
                 });
 
-                spinner.succeed(
-                    `Done! Downloaded ${chalk.cyan(`samples/${sampleFolder}`)} into ${chalk.green(destDir)}`
-                );
-
-                console.log();
-                console.log(chalk.green("Next steps:"));
-                console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
-                await maybePrintNvmrcAdvice(destDir);
-                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
-                try {
-                    const serve = await detectServeCommand(destDir);
-                    console.log(chalk.white(`  ${chalk.yellow(serve.cmd)} ${chalk.white(serve.args?.join(" ") ?? "")}`));
-                } catch {
-                    console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
-                }
+                await postProcessProject(destDir, options, spinner);
+                await finalizeExtraction({
+                    spinner,
+                    successMessage: `Done! Downloaded ${chalk.cyan(`samples/${sampleFolder}`)} into ${chalk.green(destDir)}`,
+                    projectPath: destDir
+                });
                 return;
             }
 
@@ -456,21 +593,12 @@ program
                     spinner
                 });
 
-                spinner.succeed(
-                    `Done! Extracted ${chalk.cyan(`samples/${sampleFolder}`)} into ${chalk.green(destDir)}`
-                );
-
-                console.log();
-                console.log(chalk.green("Next steps:"));
-                console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
-                await maybePrintNvmrcAdvice(destDir);
-                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
-                try {
-                    const serve = await detectServeCommand(destDir);
-                    console.log(chalk.white(`  ${chalk.yellow(serve.cmd)} ${chalk.white(serve.args?.join(" ") ?? "")}`));
-                } catch {
-                    console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
-                }
+                await postProcessProject(destDir, options, spinner);
+                await finalizeExtraction({
+                    spinner,
+                    successMessage: `Done! Extracted ${chalk.cyan(`samples/${sampleFolder}`)} into ${chalk.green(destDir)}`,
+                    projectPath: destDir
+                });
 
             } else {
                 // repo mode: sparse clone directly into destDir and keep .git there
@@ -488,26 +616,13 @@ program
 
                 const samplePath = path.join(destDir, "samples", sampleFolder);
 
-                spinner.succeed(
-                    `Done! Sparse repo ready at ${chalk.green(destDir)} (sample at ${chalk.cyan(samplePath)})`
-                );
-
-                console.log();
-                console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${samplePath}"`)}`);
-                await maybePrintNvmrcAdvice(samplePath);
-                console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
-                try {
-                    const serve = await detectServeCommand(samplePath);
-                    console.log(chalk.white(`  ${chalk.yellow(serve.cmd)} ${chalk.white(serve.args?.join(" ") ?? "")}`));
-                } catch {
-                    console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
-                }
-                console.log();
-                console.log(chalk.green("Contribute back:"));
-                console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${destDir}"`)}`);
-
-                console.log(chalk.white(`  ${chalk.yellow("git")} ${chalk.white("status")}`));
-                console.log(chalk.white(`  ${chalk.yellow("git")} ${chalk.white("checkout")} ${chalk.gray("-b")} ${chalk.white("my-change")}`));
+                await postProcessProject(samplePath, options, spinner);
+                await finalizeExtraction({
+                    spinner,
+                    successMessage: `Done! Sparse repo ready at ${chalk.green(destDir)} (sample at ${chalk.cyan(samplePath)})`,
+                    projectPath: samplePath,
+                    repoRoot: destDir
+                });
             }
         } catch (err) {
             spinner.fail((err as Error).message);
