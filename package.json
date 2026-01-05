@@ -23,6 +23,7 @@
 
   "scripts": {
     "build": "tsup src/cli.ts --format esm --target node18 --sourcemap --clean",
+    "test": "npm run build && NODE_ENV=test node --test",
     "dev": "node dist/cli.js",
     "prepublishOnly": "npm run build",
     "release": "semantic-release",

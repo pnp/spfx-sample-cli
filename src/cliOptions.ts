@@ -10,6 +10,7 @@ export type CliOptions = {
     verbose?: boolean;
     mode?: Mode;
     method?: Method;
+    noColor?: boolean;
 
     /** New project/package name to apply after download */
     rename?: string;

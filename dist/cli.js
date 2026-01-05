@@ -717,5 +717,34 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
     process.exitCode = 1;
   }
 });
-program.parse(process.argv);
+program.command("rename").argument("<path>", "Path to previously downloaded sample folder (project root)").option("--newname <newName>", "Rename the SPFx project (package.json/.yo-rc.json/package-solution.json/README)").option("--newid [id]", "Generate or set a new SPFx solution id (GUID). If omitted value, a new GUID is generated.").option("--verbose", "Print debug output", false).option("--no-color", "Disable ANSI colors", false).action(async (p, options) => {
+  if (envNoColor || options.noColor) {
+    try {
+      chalk.level = 0;
+    } catch {
+    }
+  }
+  const projectPath = path4.resolve(p);
+  if (!await pathExists(projectPath)) {
+    console.error(chalk.red(`Path not found: ${projectPath}`));
+    process.exitCode = 1;
+    return;
+  }
+  const opts = { rename: options.newname, newid: typeof options.newid === "string" ? options.newid : options.newid ? true : void 0 };
+  const spinner = ora(`Renaming project at ${projectPath}\u2026`).start();
+  try {
+    await postProcessProject(projectPath, opts, spinner);
+    spinner.succeed(`Updated project at ${projectPath}`);
+  } catch (err) {
+    spinner.fail(err.message);
+    process.exitCode = 1;
+  }
+});
+if (process.env.NODE_ENV !== "test") {
+  program.parse(process.argv);
+}
+export {
+  postProcessProject,
+  renameSpfxProject
+};
 //# sourceMappingURL=cli.js.map
