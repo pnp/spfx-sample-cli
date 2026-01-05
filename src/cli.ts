@@ -495,7 +495,7 @@ const program = new Command();
 program
     .name("spfx-sample")
     .description("Fetch a single sample folder from a large GitHub repo using git sparse-checkout (no full clone).")
-    .version("0.3.0");
+    .version("0.3.0", "-v, --version", "output the current version");
 
 // Respect NO_COLOR environment variable (https://no-color.org/) or explicit flag
 const envNoColor = typeof process.env.NO_COLOR !== "undefined";
