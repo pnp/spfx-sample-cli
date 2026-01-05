@@ -43,6 +43,8 @@ export type DownloadSubtreeOptions = {
     destDir: string;        // where to write files
     concurrency?: number;   // default 8
     onProgress?: (done: number, total: number, filePath: string) => void;
+    signal?: AbortSignal;
+    verbose?: boolean;
 };
 
 
@@ -120,8 +122,9 @@ function createSemaphore(max: number) {
  * - Uses response.json() to parse the body; callers should expect parsing errors
  *   if the response is not valid JSON.
  */
-async function fetchJson<T>(url: string): Promise<T> {
-    const res = await fetch(url, { headers: { "User-Agent": "@pnp/spfx-sample" } });
+async function fetchJson<T>(url: string, signal?: AbortSignal, verbose?: boolean): Promise<T> {
+    verbose && console.error(`[debug] GET ${url}`);
+    const res = await fetch(url, { headers: { "User-Agent": "@pnp/spfx-sample" }, signal });
     const data = (await res.json()) as any;
 
     if (!res.ok) {
@@ -159,9 +162,9 @@ async function fetchJson<T>(url: string): Promise<T> {
  * - The request is subject to GitHub API rate limits and may require authentication depending on repository visibility and rate usage.
  * - The exact shape of TreeResponse is defined elsewhere in the codebase and mirrors the GitHub API's tree response structure.
  */
-async function fetchTree(owner: string, repo: string, treeish: string, recursive = false): Promise<TreeResponse> {
+async function fetchTree(owner: string, repo: string, treeish: string, recursive = false, signal?: AbortSignal, verbose?: boolean): Promise<TreeResponse> {
     const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(treeish)}${recursive ? "?recursive=1" : ""}`;
-    return fetchJson<TreeResponse>(url);
+    return fetchJson<TreeResponse>(url, signal, verbose);
 }
 
 /**
@@ -227,21 +230,24 @@ async function ensureDirForFile(filePath: string): Promise<void> {
 export async function downloadSampleViaGitHubSubtree(opts: DownloadSubtreeOptions): Promise<void> {
     const { owner, repo, ref, sampleFolder, destDir } = opts;
     const concurrency = opts.concurrency ?? 8;
+    const signal = opts.signal;
+
+    if (signal?.aborted) throw new Error("Download aborted");
 
     // root tree
-    const root = await fetchTree(owner, repo, ref, false);
+    const root = await fetchTree(owner, repo, ref, false, opts.signal, opts.verbose);
     if (root.message) throw new Error(root.message);
 
     const samplesTree = root.tree.find(t => t.type === "tree" && t.path === "samples");
     if (!samplesTree) throw new Error(`Could not find /samples at ${owner}/${repo}@${ref}`);
 
     // /samples tree
-    const samples = await fetchTree(owner, repo, samplesTree.sha, false);
+    const samples = await fetchTree(owner, repo, samplesTree.sha, false, opts.signal, opts.verbose);
     const sampleTree = samples.tree.find(t => t.type === "tree" && t.path === sampleFolder);
     if (!sampleTree) throw new Error(`Sample folder not found: samples/${sampleFolder} at ${ref}`);
 
     // sample subtree (recursive)
-    const sample = await fetchTree(owner, repo, sampleTree.sha, true);
+    const sample = await fetchTree(owner, repo, sampleTree.sha, true, opts.signal, opts.verbose);
     if (sample.truncated) {
         // extremely unlikely for a single sample, but handle anyway
         throw new Error(`Tree listing truncated for samples/${sampleFolder}. Use the git method.`);
@@ -261,8 +267,11 @@ export async function downloadSampleViaGitHubSubtree(opts: DownloadSubtreeOption
                 const rel = b.path; // path relative to samples/<sampleFolder>
                 const fullRepoPath = `samples/${sampleFolder}/${rel}`;
 
+                if (opts.signal?.aborted) throw new Error("Download aborted");
+
                 const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(ref)}/${fullRepoPath}`;
-                const res = await fetch(rawUrl);
+                opts.verbose && console.error(`[debug] GET ${rawUrl}`);
+                const res = await fetch(rawUrl, { signal: opts.signal });
                 if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} for ${fullRepoPath}`);
 
                 const bytes = new Uint8Array(await res.arrayBuffer());

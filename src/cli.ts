@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import { downloadSampleViaGitHubSubtree } from "./githubPartialSubtree";
+import ProgressBar from "progress";
 import detectVersionManagers from "./detectVersionManagers";
 import detectServeCommand from "./detectServeCommand";
 import type { CliOptions, Mode, Method } from "./cliOptions";
@@ -18,6 +19,19 @@ import type { CliOptions, Mode, Method } from "./cliOptions";
 const DEFAULT_OWNER = "pnp";
 const DEFAULT_REPO = "sp-dev-fx-webparts";
 const DEFAULT_REF = "main";
+
+// Global handlers to ensure process exits with non-zero code on unexpected errors
+process.on("unhandledRejection", (reason) => {
+    console.error("Unhandled Promise rejection:", reason);
+    process.exitCode = 1;
+});
+
+process.on("uncaughtException", (err) => {
+    console.error("Uncaught exception:", (err as Error).message || err);
+    process.exitCode = 1;
+    // give other handlers a chance then exit
+    setImmediate(() => process.exit(1));
+});
 
 function normalizeSampleArg(sample: string): string {
     // Allow either "react-my-sample" OR "samples/react-my-sample"
@@ -49,15 +63,28 @@ type RunResult = { stdout: string; stderr: string };
 async function run(
     cmd: string,
     args: string[],
-    opts: { cwd?: string; verbose?: boolean } = {}
+    opts: { cwd?: string; verbose?: boolean; signal?: AbortSignal } = {}
 ): Promise<RunResult> {
     return new Promise((resolve, reject) => {
+        if (opts.verbose) console.error(`[debug] spawn: ${cmd} ${args.join(" ")} cwd=${opts.cwd ?? process.cwd()}`);
         const child = spawn(cmd, args, {
             cwd: opts.cwd,
             shell: false,
             windowsHide: true,
             stdio: ["ignore", "pipe", "pipe"]
         });
+
+        // If an AbortSignal is provided, try to kill the child when aborted
+        if (opts.signal) {
+            if (opts.signal.aborted) {
+                child.kill();
+            } else {
+                const onAbort = () => {
+                    try { child.kill(); } catch {}
+                };
+                opts.signal.addEventListener("abort", onAbort, { once: true });
+            }
+        }
 
         let stdout = "";
         let stderr = "";
@@ -168,6 +195,7 @@ async function sparseCloneInto(args: {
     repoDir: string;
     verbose?: boolean;
     spinner?: ReturnType<typeof ora>;
+    signal?: AbortSignal;
 }): Promise<void> {
     const { owner, repo, ref, sampleFolder, repoDir, verbose, spinner } = args;
 
@@ -178,22 +206,23 @@ async function sparseCloneInto(args: {
     await run(
         "git",
         ["clone", "--depth=1", "--filter=blob:none", "--no-checkout", repoUrl, repoDir],
-        { verbose }
+        { verbose, signal: args.signal }
     );
 
     spinner && (spinner.text = `Enabling sparse checkout…`);
-    await run("git", ["-C", repoDir, "sparse-checkout", "init", "--cone"], { verbose });
+    await run("git", ["-C", repoDir, "sparse-checkout", "init", "--cone"], { verbose, signal: args.signal });
 
     spinner && (spinner.text = `Selecting ${sparsePath}…`);
-    await run("git", ["-C", repoDir, "sparse-checkout", "set", sparsePath], { verbose });
+    await run("git", ["-C", repoDir, "sparse-checkout", "set", sparsePath], { verbose, signal: args.signal });
 
-    spinner && (spinner.text = `Fetching ref ${ref}…`);
+    spinner && (spinner.text = `Switching to ${ref} branch…`);
     await run("git", ["-C", repoDir, "fetch", "--depth=1", "--filter=blob:none", "origin", ref], {
-        verbose
+        verbose,
+        signal: args.signal
     });
 
-    spinner && (spinner.text = `Checking out ${ref}…`);
-    await run("git", ["-C", repoDir, "checkout", "--detach", "FETCH_HEAD"], { verbose });
+    spinner && (spinner.text = `Getting sample from ${ref} branch…`);
+    await run("git", ["-C", repoDir, "checkout", "--detach", "FETCH_HEAD"], { verbose, signal: args.signal });
 
     const srcSampleDir = path.join(repoDir, "samples", sampleFolder);
     if (!(await pathExists(srcSampleDir)) || !(await isDirNonEmpty(srcSampleDir))) {
@@ -209,6 +238,7 @@ async function fetchSampleViaSparseGitExtract(args: {
     destDir: string; // final output directory (sample root)
     verbose?: boolean;
     spinner?: ReturnType<typeof ora>;
+    signal?: AbortSignal;
 }): Promise<void> {
     const { owner, repo, ref, sampleFolder, destDir, verbose, spinner } = args;
 
@@ -216,7 +246,7 @@ async function fetchSampleViaSparseGitExtract(args: {
     const tmpRepoDir = path.join(tmpRoot, "repo");
 
     try {
-        await sparseCloneInto({ owner, repo, ref, sampleFolder, repoDir: tmpRepoDir, verbose, spinner });
+        await sparseCloneInto({ owner, repo, ref, sampleFolder, repoDir: tmpRepoDir, verbose, spinner, signal: args.signal });
 
         const srcSampleDir = path.join(tmpRepoDir, "samples", sampleFolder);
 
@@ -467,6 +497,10 @@ program
     .description("Fetch a single sample folder from a large GitHub repo using git sparse-checkout (no full clone).")
     .version("0.3.0");
 
+// Respect NO_COLOR environment variable (https://no-color.org/) or explicit flag
+const envNoColor = typeof process.env.NO_COLOR !== "undefined";
+
+
 program
         .command("get")
         .argument("<sample>", "Sample folder name, e.g. react-hello-world OR samples/react-hello-world")
@@ -480,8 +514,19 @@ program
         .option("--method <method>", 'Method: "auto" (git if available, else api), "git", or "api"', "auto")
         .option("--force", "Overwrite destination if it exists", false)
         .option("--verbose", "Print git output", false)
+        .option("--no-color", "Disable ANSI colors", false)
 
     .action(async (sample: string, options: CliOptions) => {
+        // If NO_COLOR env var set or user passed --no-color, disable chalk output
+        if (envNoColor || options.noColor) {
+            try {
+                // Chalk v5: setting level to 0 disables colors
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (chalk as any).level = 0;
+            } catch {
+                // ignore
+            }
+        }
         const sampleFolder = normalizeSampleArg(sample);
         const ref = options.ref || DEFAULT_REF;
         const repo = options.repo || DEFAULT_REPO;
@@ -517,6 +562,7 @@ program
         // Decide method (auto => git if available, else api)
         const gitAvailable = await isGitAvailable(verbose);
         const chosen: Method = method === "auto" ? (gitAvailable ? "git" : "api") : method;
+        if (verbose) console.error(`[debug] method=${method} gitAvailable=${gitAvailable} chosen=${chosen}`);
 
         // If using git, validate git version/features
         if (chosen === "git") {
@@ -555,10 +601,34 @@ program
 
         const spinner = ora(`Getting sample ${sampleFolder} from ${owner}/${repo}@${ref}…`).start();
 
+        // Show concise phase updates
+        spinner.text = `Preparing to fetch (method=${chosen})…`;
+
+        // Allow aborting long-running operations (downloads, git) via Ctrl-C
+        const controllers: AbortController[] = [];
+        const topController = new AbortController();
+        controllers.push(topController);
+
+        const onSigint = () => {
+            spinner && spinner.fail("Aborted by user.");
+            for (const c of controllers) c.abort();
+            // Standard unix convention: 128 + SIGINT(2) = 130
+            process.exit(130);
+        };
+        process.once("SIGINT", onSigint);
+
         try {
             if (chosen === "api") {
+                spinner.text = `Downloading files via GitHub API…`;
                 // Tokenless API method: download only that sample folder via subtree tree-walk + raw URLs
                 await fs.mkdir(destDir, { recursive: true });
+
+                // Render a progress bar. We don't know total until download begins, so create lazily.
+                let bar: ProgressBar | null = null;
+                let lastRendered = Date.now();
+
+                const controller = new AbortController();
+                controllers.push(controller);
 
                 await downloadSampleViaGitHubSubtree({
                     owner,
@@ -567,11 +637,38 @@ program
                     sampleFolder,
                     destDir,
                     concurrency: 8,
+                    verbose,
+                    signal: controller.signal,
                     onProgress: (done, total, filePath) => {
-                        spinner.text = `Downloading (${done}/${total})… ${filePath}`;
+                        // Create bar when we know `total`
+                        if (!bar) {
+                            try {
+                                bar = new ProgressBar("[:bar] :percent :current/:total :file", {
+                                    total,
+                                    width: 30,
+                                    renderThrottle: 100
+                                });
+                            } catch {
+                                bar = null;
+                            }
+                        }
+
+                        if (bar) {
+                            // tick to current count (ProgressBar expects increments)
+                            const delta = done - (bar.curr || 0);
+                            if (delta > 0) bar.tick(delta, { file: path.basename(filePath) });
+                        } else {
+                            // fallback to spinner text updates, throttle to avoid spam
+                            const now = Date.now();
+                            if (now - lastRendered > 150) {
+                                spinner.text = `Downloading (${done}/${total})… ${filePath}`;
+                                lastRendered = now;
+                            }
+                        }
                     }
                 });
 
+                spinner.text = `Post-processing project files…`;
                 await postProcessProject(destDir, options, spinner);
                 await finalizeExtraction({
                     spinner,
@@ -583,6 +680,7 @@ program
 
             // chosen === "git"
             if (mode === "extract") {
+                spinner.text = `Performing sparse git extract…`;
                 await fetchSampleViaSparseGitExtract({
                     owner,
                     repo,
@@ -590,9 +688,11 @@ program
                     sampleFolder,
                     destDir,
                     verbose,
-                    spinner
+                    spinner,
+                    signal: topController.signal
                 });
 
+                spinner.text = `Post-processing project files…`;
                 await postProcessProject(destDir, options, spinner);
                 await finalizeExtraction({
                     spinner,
@@ -604,6 +704,7 @@ program
                 // repo mode: sparse clone directly into destDir and keep .git there
                 await fs.mkdir(destDir, { recursive: true });
 
+                spinner.text = `Performing sparse git clone (repo mode)…`;
                 await sparseCloneInto({
                     owner,
                     repo,
@@ -611,7 +712,8 @@ program
                     sampleFolder,
                     repoDir: destDir,
                     verbose,
-                    spinner
+                    spinner,
+                    signal: topController.signal
                 });
 
                 const samplePath = path.join(destDir, "samples", sampleFolder);

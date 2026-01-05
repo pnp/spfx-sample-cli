@@ -36,8 +36,9 @@ function createSemaphore(max) {
     else queue.push(run2);
   });
 }
-async function fetchJson(url) {
-  const res = await fetch(url, { headers: { "User-Agent": "@pnp/spfx-sample" } });
+async function fetchJson(url, signal, verbose) {
+  verbose && console.error(`[debug] GET ${url}`);
+  const res = await fetch(url, { headers: { "User-Agent": "@pnp/spfx-sample" }, signal });
   const data = await res.json();
   if (!res.ok) {
     if (res.status === 403 && res.headers.get("X-RateLimit-Remaining") === "0") {
@@ -49,9 +50,9 @@ async function fetchJson(url) {
   }
   return data;
 }
-async function fetchTree(owner, repo, treeish, recursive = false) {
+async function fetchTree(owner, repo, treeish, recursive = false, signal, verbose) {
   const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(treeish)}${recursive ? "?recursive=1" : ""}`;
-  return fetchJson(url);
+  return fetchJson(url, signal, verbose);
 }
 async function ensureDirForFile(filePath) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -59,14 +60,16 @@ async function ensureDirForFile(filePath) {
 async function downloadSampleViaGitHubSubtree(opts) {
   const { owner, repo, ref, sampleFolder, destDir } = opts;
   const concurrency = opts.concurrency ?? 8;
-  const root = await fetchTree(owner, repo, ref, false);
+  const signal = opts.signal;
+  if (signal?.aborted) throw new Error("Download aborted");
+  const root = await fetchTree(owner, repo, ref, false, opts.signal, opts.verbose);
   if (root.message) throw new Error(root.message);
   const samplesTree = root.tree.find((t) => t.type === "tree" && t.path === "samples");
   if (!samplesTree) throw new Error(`Could not find /samples at ${owner}/${repo}@${ref}`);
-  const samples = await fetchTree(owner, repo, samplesTree.sha, false);
+  const samples = await fetchTree(owner, repo, samplesTree.sha, false, opts.signal, opts.verbose);
   const sampleTree = samples.tree.find((t) => t.type === "tree" && t.path === sampleFolder);
   if (!sampleTree) throw new Error(`Sample folder not found: samples/${sampleFolder} at ${ref}`);
-  const sample = await fetchTree(owner, repo, sampleTree.sha, true);
+  const sample = await fetchTree(owner, repo, sampleTree.sha, true, opts.signal, opts.verbose);
   if (sample.truncated) {
     throw new Error(`Tree listing truncated for samples/${sampleFolder}. Use the git method.`);
   }
@@ -80,8 +83,10 @@ async function downloadSampleViaGitHubSubtree(opts) {
       (b) => sem(async () => {
         const rel = b.path;
         const fullRepoPath = `samples/${sampleFolder}/${rel}`;
+        if (opts.signal?.aborted) throw new Error("Download aborted");
         const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(ref)}/${fullRepoPath}`;
-        const res = await fetch(rawUrl);
+        opts.verbose && console.error(`[debug] GET ${rawUrl}`);
+        const res = await fetch(rawUrl, { signal: opts.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} for ${fullRepoPath}`);
         const bytes = new Uint8Array(await res.arrayBuffer());
         const outPath = path.join(destDir, rel);
@@ -93,6 +98,9 @@ async function downloadSampleViaGitHubSubtree(opts) {
     )
   );
 }
+
+// src/cli.ts
+import ProgressBar from "progress";
 
 // src/detectVersionManagers.ts
 import { access } from "fs/promises";
@@ -193,6 +201,15 @@ var detectServeCommand_default = detectServeCommand;
 var DEFAULT_OWNER = "pnp";
 var DEFAULT_REPO = "sp-dev-fx-webparts";
 var DEFAULT_REF = "main";
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Promise rejection:", reason);
+  process.exitCode = 1;
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err.message || err);
+  process.exitCode = 1;
+  setImmediate(() => process.exit(1));
+});
 function normalizeSampleArg(sample) {
   const s = sample.replaceAll("\\", "/").trim();
   if (s.startsWith("samples/")) return s.slice("samples/".length);
@@ -216,12 +233,26 @@ async function isDirNonEmpty(p) {
 }
 async function run(cmd, args, opts = {}) {
   return new Promise((resolve, reject) => {
+    if (opts.verbose) console.error(`[debug] spawn: ${cmd} ${args.join(" ")} cwd=${opts.cwd ?? process.cwd()}`);
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"]
     });
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        child.kill();
+      } else {
+        const onAbort = () => {
+          try {
+            child.kill();
+          } catch {
+          }
+        };
+        opts.signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => {
@@ -306,18 +337,19 @@ async function sparseCloneInto(args) {
   await run(
     "git",
     ["clone", "--depth=1", "--filter=blob:none", "--no-checkout", repoUrl, repoDir],
-    { verbose }
+    { verbose, signal: args.signal }
   );
   spinner && (spinner.text = `Enabling sparse checkout\u2026`);
-  await run("git", ["-C", repoDir, "sparse-checkout", "init", "--cone"], { verbose });
+  await run("git", ["-C", repoDir, "sparse-checkout", "init", "--cone"], { verbose, signal: args.signal });
   spinner && (spinner.text = `Selecting ${sparsePath}\u2026`);
-  await run("git", ["-C", repoDir, "sparse-checkout", "set", sparsePath], { verbose });
-  spinner && (spinner.text = `Fetching ref ${ref}\u2026`);
+  await run("git", ["-C", repoDir, "sparse-checkout", "set", sparsePath], { verbose, signal: args.signal });
+  spinner && (spinner.text = `Switching to ${ref} branch\u2026`);
   await run("git", ["-C", repoDir, "fetch", "--depth=1", "--filter=blob:none", "origin", ref], {
-    verbose
+    verbose,
+    signal: args.signal
   });
-  spinner && (spinner.text = `Checking out ${ref}\u2026`);
-  await run("git", ["-C", repoDir, "checkout", "--detach", "FETCH_HEAD"], { verbose });
+  spinner && (spinner.text = `Getting sample from ${ref} branch\u2026`);
+  await run("git", ["-C", repoDir, "checkout", "--detach", "FETCH_HEAD"], { verbose, signal: args.signal });
   const srcSampleDir = path4.join(repoDir, "samples", sampleFolder);
   if (!await pathExists(srcSampleDir) || !await isDirNonEmpty(srcSampleDir)) {
     throw new Error(`Sample not found or empty: ${owner}/${repo}@${ref} \u2192 samples/${sampleFolder}`);
@@ -328,7 +360,7 @@ async function fetchSampleViaSparseGitExtract(args) {
   const tmpRoot = await fs2.mkdtemp(path4.join(os2.tmpdir(), "spfx-sample-"));
   const tmpRepoDir = path4.join(tmpRoot, "repo");
   try {
-    await sparseCloneInto({ owner, repo, ref, sampleFolder, repoDir: tmpRepoDir, verbose, spinner });
+    await sparseCloneInto({ owner, repo, ref, sampleFolder, repoDir: tmpRepoDir, verbose, spinner, signal: args.signal });
     const srcSampleDir = path4.join(tmpRepoDir, "samples", sampleFolder);
     spinner && (spinner.text = `Copying sample to ${destDir}\u2026`);
     await copyDir(srcSampleDir, destDir);
@@ -515,7 +547,14 @@ async function postProcessProject(projectPath, options, spinner) {
 }
 var program = new Command();
 program.name("spfx-sample").description("Fetch a single sample folder from a large GitHub repo using git sparse-checkout (no full clone).").version("0.3.0");
-program.command("get").argument("<sample>", "Sample folder name, e.g. react-hello-world OR samples/react-hello-world").option("--owner <owner>", "GitHub org/user", DEFAULT_OWNER).option("--repo <repo>", "GitHub repository name", DEFAULT_REPO).option("--ref <ref>", "Git ref (branch, tag, or commit SHA)", DEFAULT_REF).option("--dest <dest>", "Destination folder (default varies by --mode)").option("--rename <newName>", "Rename the downloaded SPFx project (package.json/.yo-rc.json/package-solution.json/README)").option("--newid [id]", "Generate or set a new SPFx solution id (GUID). If omitted value, a new GUID is generated.").option("--mode <mode>", 'Mode: "extract" (copy sample out) or "repo" (leave sparse repo)', "extract").option("--method <method>", 'Method: "auto" (git if available, else api), "git", or "api"', "auto").option("--force", "Overwrite destination if it exists", false).option("--verbose", "Print git output", false).action(async (sample, options) => {
+var envNoColor = typeof process.env.NO_COLOR !== "undefined";
+program.command("get").argument("<sample>", "Sample folder name, e.g. react-hello-world OR samples/react-hello-world").option("--owner <owner>", "GitHub org/user", DEFAULT_OWNER).option("--repo <repo>", "GitHub repository name", DEFAULT_REPO).option("--ref <ref>", "Git ref (branch, tag, or commit SHA)", DEFAULT_REF).option("--dest <dest>", "Destination folder (default varies by --mode)").option("--rename <newName>", "Rename the downloaded SPFx project (package.json/.yo-rc.json/package-solution.json/README)").option("--newid [id]", "Generate or set a new SPFx solution id (GUID). If omitted value, a new GUID is generated.").option("--mode <mode>", 'Mode: "extract" (copy sample out) or "repo" (leave sparse repo)', "extract").option("--method <method>", 'Method: "auto" (git if available, else api), "git", or "api"', "auto").option("--force", "Overwrite destination if it exists", false).option("--verbose", "Print git output", false).option("--no-color", "Disable ANSI colors", false).action(async (sample, options) => {
+  if (envNoColor || options.noColor) {
+    try {
+      chalk.level = 0;
+    } catch {
+    }
+  }
   const sampleFolder = normalizeSampleArg(sample);
   const ref = options.ref || DEFAULT_REF;
   const repo = options.repo || DEFAULT_REPO;
@@ -541,6 +580,7 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
   const destDir = path4.resolve(options.dest ?? defaultDest);
   const gitAvailable = await isGitAvailable(verbose);
   const chosen = method === "auto" ? gitAvailable ? "git" : "api" : method;
+  if (verbose) console.error(`[debug] method=${method} gitAvailable=${gitAvailable} chosen=${chosen}`);
   if (chosen === "git") {
     try {
       await ensureGit(verbose);
@@ -571,9 +611,24 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
     }
   }
   const spinner = ora(`Getting sample ${sampleFolder} from ${owner}/${repo}@${ref}\u2026`).start();
+  spinner.text = `Preparing to fetch (method=${chosen})\u2026`;
+  const controllers = [];
+  const topController = new AbortController();
+  controllers.push(topController);
+  const onSigint = () => {
+    spinner && spinner.fail("Aborted by user.");
+    for (const c of controllers) c.abort();
+    process.exit(130);
+  };
+  process.once("SIGINT", onSigint);
   try {
     if (chosen === "api") {
+      spinner.text = `Downloading files via GitHub API\u2026`;
       await fs2.mkdir(destDir, { recursive: true });
+      let bar = null;
+      let lastRendered = Date.now();
+      const controller = new AbortController();
+      controllers.push(controller);
       await downloadSampleViaGitHubSubtree({
         owner,
         repo,
@@ -581,10 +636,33 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
         sampleFolder,
         destDir,
         concurrency: 8,
+        verbose,
+        signal: controller.signal,
         onProgress: (done, total, filePath) => {
-          spinner.text = `Downloading (${done}/${total})\u2026 ${filePath}`;
+          if (!bar) {
+            try {
+              bar = new ProgressBar("[:bar] :percent :current/:total :file", {
+                total,
+                width: 30,
+                renderThrottle: 100
+              });
+            } catch {
+              bar = null;
+            }
+          }
+          if (bar) {
+            const delta = done - (bar.curr || 0);
+            if (delta > 0) bar.tick(delta, { file: path4.basename(filePath) });
+          } else {
+            const now = Date.now();
+            if (now - lastRendered > 150) {
+              spinner.text = `Downloading (${done}/${total})\u2026 ${filePath}`;
+              lastRendered = now;
+            }
+          }
         }
       });
+      spinner.text = `Post-processing project files\u2026`;
       await postProcessProject(destDir, options, spinner);
       await finalizeExtraction({
         spinner,
@@ -594,6 +672,7 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
       return;
     }
     if (mode === "extract") {
+      spinner.text = `Performing sparse git extract\u2026`;
       await fetchSampleViaSparseGitExtract({
         owner,
         repo,
@@ -601,8 +680,10 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
         sampleFolder,
         destDir,
         verbose,
-        spinner
+        spinner,
+        signal: topController.signal
       });
+      spinner.text = `Post-processing project files\u2026`;
       await postProcessProject(destDir, options, spinner);
       await finalizeExtraction({
         spinner,
@@ -611,6 +692,7 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
       });
     } else {
       await fs2.mkdir(destDir, { recursive: true });
+      spinner.text = `Performing sparse git clone (repo mode)\u2026`;
       await sparseCloneInto({
         owner,
         repo,
@@ -618,7 +700,8 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
         sampleFolder,
         repoDir: destDir,
         verbose,
-        spinner
+        spinner,
+        signal: topController.signal
       });
       const samplePath = path4.join(destDir, "samples", sampleFolder);
       await postProcessProject(samplePath, options, spinner);
