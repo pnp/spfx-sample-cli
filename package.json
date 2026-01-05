@@ -11,16 +11,13 @@
     "README.md",
     "LICENSE"
   ],
-
   "publishConfig": {
     "access": "public"
   },
   "type": "module",
-
   "engines": {
     "node": ">=20"
   },
-
   "scripts": {
     "build": "tsup src/cli.ts --format esm --target node18 --sourcemap --clean",
     "test": "npm run build && NODE_ENV=test node --test",
@@ -46,15 +43,16 @@
     "progress": "^2.0.3"
   },
   "devDependencies": {
-    "@types/node": "^25.0.3",
-    "tsup": "^8.5.1",
-    "typescript": "^5.9.3",
-    "semantic-release": "^24.0.0",
-    "@semantic-release/commit-analyzer": "^13.0.0",
-    "@semantic-release/release-notes-generator": "^14.0.0",
     "@semantic-release/changelog": "^6.0.0",
-    "@semantic-release/npm": "^12.0.0",
+    "@semantic-release/commit-analyzer": "^13.0.0",
+    "@semantic-release/git": "^10.0.0",
     "@semantic-release/github": "^11.0.0",
-    "@semantic-release/git": "^10.0.0"
+    "@semantic-release/npm": "^12.0.0",
+    "@semantic-release/release-notes-generator": "^14.0.0",
+    "@types/node": "^25.0.3",
+    "@types/progress": "^2.0.7",
+    "semantic-release": "^24.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
   }
 }

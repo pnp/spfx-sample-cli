@@ -39,6 +39,7 @@ function normalizeSampleArg(sample: string): string {
     if (s.startsWith("samples/")) return s.slice("samples/".length);
     return s;
 }
+export { normalizeSampleArg };
 
 async function pathExists(p: string): Promise<boolean> {
     try {
@@ -115,6 +116,7 @@ function parseGitVersion(output: string): { major: number; minor: number; patch:
     if (!m) return null;
     return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]) };
 }
+export { parseGitVersion };
 
 function versionGte(
     v: { major: number; minor: number; patch: number },
@@ -124,6 +126,7 @@ function versionGte(
     if (v.minor !== min.minor) return v.minor > min.minor;
     return v.patch >= min.patch;
 }
+export { versionGte };
 
 async function ensureGit(verbose?: boolean): Promise<void> {
     let res: RunResult;
@@ -161,6 +164,7 @@ function assertMethod(m: string | undefined): Method {
     if (m === "auto" || m === "git" || m === "api") return m;
     throw new Error(`Invalid --method "${m}". Use "auto", "git", or "api".`);
 }
+export { assertMethod };
 
 async function copyDir(src: string, dest: string): Promise<void> {
     await fs.mkdir(dest, { recursive: true });
@@ -384,11 +388,13 @@ function assertMode(m: string | undefined): Mode {
     if (m === "extract" || m === "repo") return m;
     throw new Error(`Invalid --mode "${m}". Use "extract" or "repo".`);
 }
+export { assertMode };
 
 function isGuid(v: string): boolean {
     // Accepts RFC4122-ish GUIDs (case-insensitive)
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
+export { isGuid };
 
 async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
     try {
@@ -731,6 +737,94 @@ program
             process.exitCode = 1;
         }
     });
+
+/**
+ * Testable handler for the `get` command. Allows injecting dependencies for unit testing.
+ */
+export async function getCommandHandler(sample: string, options: CliOptions, deps?: {
+    download?: typeof downloadSampleViaGitHubSubtree;
+    fetchSparse?: typeof fetchSampleViaSparseGitExtract;
+    sparseClone?: typeof sparseCloneInto;
+    postProcess?: typeof postProcessProject;
+    finalize?: typeof finalizeExtraction;
+    isGitAvailable?: typeof isGitAvailable;
+    ensureGit?: typeof ensureGit;
+}) {
+    const sampleFolder = normalizeSampleArg(sample);
+    const ref = options.ref || DEFAULT_REF;
+    const repo = options.repo || DEFAULT_REPO;
+    const owner = options.owner || DEFAULT_OWNER;
+    const verbose = !!options.verbose;
+
+    const download = deps?.download ?? downloadSampleViaGitHubSubtree;
+    const fetchSparse = deps?.fetchSparse ?? fetchSampleViaSparseGitExtract;
+    const sparseClone = deps?.sparseClone ?? sparseCloneInto;
+    const postProcess = deps?.postProcess ?? postProcessProject;
+    const finalize = deps?.finalize ?? finalizeExtraction;
+    const gitAvailableFn = deps?.isGitAvailable ?? isGitAvailable;
+    const ensureGitFn = deps?.ensureGit ?? ensureGit;
+
+    let mode: Mode;
+    try {
+        mode = assertMode(options.mode);
+    } catch (e) {
+        throw e;
+    }
+
+    let method: Method;
+    try {
+        method = assertMethod(options.method);
+    } catch (e) {
+        throw e;
+    }
+
+    const defaultDest = mode === "extract" ? `./${sampleFolder}` : `./${repo}-${sampleFolder}`.replaceAll("/", "-");
+    const destDir = path.resolve(options.dest ?? defaultDest);
+
+    const gitAvailable = await gitAvailableFn(verbose);
+    const chosen: Method = method === "auto" ? (gitAvailable ? "git" : "api") : method;
+
+    if (chosen === "git") {
+        await ensureGitFn(verbose);
+    }
+
+    if (chosen === "api" && mode === "repo") {
+        throw new Error(`--mode repo requires --method git (API method cannot create a git working repo).`);
+    }
+
+    if (await pathExists(destDir)) {
+        if (!options.force) {
+            const nonEmpty = await isDirNonEmpty(destDir);
+            if (nonEmpty) throw new Error(`Destination exists and is not empty: ${destDir}`);
+        } else {
+            await fs.rm(destDir, { recursive: true, force: true });
+        }
+    }
+
+    if (chosen === "api") {
+        await fs.mkdir(destDir, { recursive: true });
+        await download({ owner, repo, ref, sampleFolder, destDir, concurrency: 8, verbose, signal: undefined, onProgress: undefined });
+        await postProcess(destDir, options, undefined);
+        await finalize({ spinner: undefined, successMessage: `Done`, projectPath: destDir });
+        return;
+    }
+
+    if (chosen === "git") {
+        if (mode === "extract") {
+            await fetchSparse({ owner, repo, ref, sampleFolder, destDir, verbose, spinner: undefined, signal: undefined });
+            await postProcess(destDir, options, undefined);
+            await finalize({ spinner: undefined, successMessage: `Done`, projectPath: destDir });
+            return;
+        } else {
+            await fs.mkdir(destDir, { recursive: true });
+            await sparseClone({ owner, repo, ref, sampleFolder, repoDir: destDir, verbose, spinner: undefined, signal: undefined });
+            const samplePath = path.join(destDir, "samples", sampleFolder);
+            await postProcess(samplePath, options, undefined);
+            await finalize({ spinner: undefined, successMessage: `Done`, projectPath: samplePath, repoRoot: destDir });
+            return;
+        }
+    }
+}
 
 program
     .command("rename")

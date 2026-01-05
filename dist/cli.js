@@ -717,6 +717,72 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
     process.exitCode = 1;
   }
 });
+async function getCommandHandler(sample, options, deps) {
+  const sampleFolder = normalizeSampleArg(sample);
+  const ref = options.ref || DEFAULT_REF;
+  const repo = options.repo || DEFAULT_REPO;
+  const owner = options.owner || DEFAULT_OWNER;
+  const verbose = !!options.verbose;
+  const download = deps?.download ?? downloadSampleViaGitHubSubtree;
+  const fetchSparse = deps?.fetchSparse ?? fetchSampleViaSparseGitExtract;
+  const sparseClone = deps?.sparseClone ?? sparseCloneInto;
+  const postProcess = deps?.postProcess ?? postProcessProject;
+  const finalize = deps?.finalize ?? finalizeExtraction;
+  const gitAvailableFn = deps?.isGitAvailable ?? isGitAvailable;
+  const ensureGitFn = deps?.ensureGit ?? ensureGit;
+  let mode;
+  try {
+    mode = assertMode(options.mode);
+  } catch (e) {
+    throw e;
+  }
+  let method;
+  try {
+    method = assertMethod(options.method);
+  } catch (e) {
+    throw e;
+  }
+  const defaultDest = mode === "extract" ? `./${sampleFolder}` : `./${repo}-${sampleFolder}`.replaceAll("/", "-");
+  const destDir = path4.resolve(options.dest ?? defaultDest);
+  const gitAvailable = await gitAvailableFn(verbose);
+  const chosen = method === "auto" ? gitAvailable ? "git" : "api" : method;
+  if (chosen === "git") {
+    await ensureGitFn(verbose);
+  }
+  if (chosen === "api" && mode === "repo") {
+    throw new Error(`--mode repo requires --method git (API method cannot create a git working repo).`);
+  }
+  if (await pathExists(destDir)) {
+    if (!options.force) {
+      const nonEmpty = await isDirNonEmpty(destDir);
+      if (nonEmpty) throw new Error(`Destination exists and is not empty: ${destDir}`);
+    } else {
+      await fs2.rm(destDir, { recursive: true, force: true });
+    }
+  }
+  if (chosen === "api") {
+    await fs2.mkdir(destDir, { recursive: true });
+    await download({ owner, repo, ref, sampleFolder, destDir, concurrency: 8, verbose, signal: void 0, onProgress: void 0 });
+    await postProcess(destDir, options, void 0);
+    await finalize({ spinner: void 0, successMessage: `Done`, projectPath: destDir });
+    return;
+  }
+  if (chosen === "git") {
+    if (mode === "extract") {
+      await fetchSparse({ owner, repo, ref, sampleFolder, destDir, verbose, spinner: void 0, signal: void 0 });
+      await postProcess(destDir, options, void 0);
+      await finalize({ spinner: void 0, successMessage: `Done`, projectPath: destDir });
+      return;
+    } else {
+      await fs2.mkdir(destDir, { recursive: true });
+      await sparseClone({ owner, repo, ref, sampleFolder, repoDir: destDir, verbose, spinner: void 0, signal: void 0 });
+      const samplePath = path4.join(destDir, "samples", sampleFolder);
+      await postProcess(samplePath, options, void 0);
+      await finalize({ spinner: void 0, successMessage: `Done`, projectPath: samplePath, repoRoot: destDir });
+      return;
+    }
+  }
+}
 program.command("rename").argument("<path>", "Path to previously downloaded sample folder (project root)").option("--newname <newName>", "Rename the SPFx project (package.json/.yo-rc.json/package-solution.json/README)").option("--newid [id]", "Generate or set a new SPFx solution id (GUID). If omitted value, a new GUID is generated.").option("--verbose", "Print debug output", false).option("--no-color", "Disable ANSI colors", false).action(async (p, options) => {
   if (envNoColor || options.noColor) {
     try {
@@ -744,7 +810,14 @@ if (process.env.NODE_ENV !== "test") {
   program.parse(process.argv);
 }
 export {
+  assertMethod,
+  assertMode,
+  getCommandHandler,
+  isGuid,
+  normalizeSampleArg,
+  parseGitVersion,
   postProcessProject,
-  renameSpfxProject
+  renameSpfxProject,
+  versionGte
 };
 //# sourceMappingURL=cli.js.map
