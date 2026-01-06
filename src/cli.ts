@@ -563,7 +563,10 @@ program
         const defaultDest =
             mode === "extract" ? `./${sampleFolder}` : `./${repo}-${sampleFolder}`.replaceAll("/", "-");
 
-        const destDir = path.resolve(options.dest ?? defaultDest);
+        // If user provided --rename (newName) but no --dest, use the new name as destination folder.
+        // This makes `spfx-sample get samples/foo --rename bar` create ./bar by default.
+        const impliedDest = options.dest ? undefined : options.rename ? `./${options.rename}` : undefined;
+        const destDir = path.resolve(options.dest ?? impliedDest ?? defaultDest);
 
         // Decide method (auto => git if available, else api)
         const gitAvailable = await isGitAvailable(verbose);
@@ -779,7 +782,11 @@ export async function getCommandHandler(sample: string, options: CliOptions, dep
     }
 
     const defaultDest = mode === "extract" ? `./${sampleFolder}` : `./${repo}-${sampleFolder}`.replaceAll("/", "-");
-    const destDir = path.resolve(options.dest ?? defaultDest);
+
+    // When running programmatically, if --dest isn't provided but --rename/newName is,
+    // treat the new name as the destination folder so callers get the same behavior as the CLI.
+    const impliedDest = options.dest ? undefined : options.rename ? `./${options.rename}` : undefined;
+    const destDir = path.resolve(options.dest ?? impliedDest ?? defaultDest);
 
     const gitAvailable = await gitAvailableFn(verbose);
     const chosen: Method = method === "auto" ? (gitAvailable ? "git" : "api") : method;

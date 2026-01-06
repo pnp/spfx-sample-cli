@@ -577,7 +577,8 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
     return;
   }
   const defaultDest = mode === "extract" ? `./${sampleFolder}` : `./${repo}-${sampleFolder}`.replaceAll("/", "-");
-  const destDir = path4.resolve(options.dest ?? defaultDest);
+  const impliedDest = options.dest ? void 0 : options.rename ? `./${options.rename}` : void 0;
+  const destDir = path4.resolve(options.dest ?? impliedDest ?? defaultDest);
   const gitAvailable = await isGitAvailable(verbose);
   const chosen = method === "auto" ? gitAvailable ? "git" : "api" : method;
   if (verbose) console.error(`[debug] method=${method} gitAvailable=${gitAvailable} chosen=${chosen}`);
@@ -743,7 +744,8 @@ async function getCommandHandler(sample, options, deps) {
     throw e;
   }
   const defaultDest = mode === "extract" ? `./${sampleFolder}` : `./${repo}-${sampleFolder}`.replaceAll("/", "-");
-  const destDir = path4.resolve(options.dest ?? defaultDest);
+  const impliedDest = options.dest ? void 0 : options.rename ? `./${options.rename}` : void 0;
+  const destDir = path4.resolve(options.dest ?? impliedDest ?? defaultDest);
   const gitAvailable = await gitAvailableFn(verbose);
   const chosen = method === "auto" ? gitAvailable ? "git" : "api" : method;
   if (chosen === "git") {
