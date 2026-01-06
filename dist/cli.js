@@ -199,6 +199,13 @@ var detectServeCommand_default = detectServeCommand;
 
 // src/cli.ts
 import https from "https";
+var fmt = {
+  cmd: (s) => chalk.cyan.bold(s),
+  flag: (s) => chalk.cyan.bold(s),
+  path: (s) => chalk.blueBright(s),
+  version: (s) => chalk.blueBright(s),
+  note: (s) => chalk.white(s)
+};
 var DEFAULT_OWNER = "pnp";
 var DEFAULT_REPO = "sp-dev-fx-webparts";
 var DEFAULT_REF = "main";
@@ -313,7 +320,7 @@ async function isGitAvailable(verbose) {
 function assertMethod(m) {
   if (!m) return "auto";
   if (m === "auto" || m === "git" || m === "api") return m;
-  throw new Error(`Invalid --method "${m}". Use "auto", "git", or "api".`);
+  throw new Error(`Invalid ${fmt.flag("--method")} "${m}". Use "auto", "git", or "api".`);
 }
 async function copyDir(src, dest) {
   await fs2.mkdir(dest, { recursive: true });
@@ -406,32 +413,32 @@ async function maybePrintNvmrcAdvice(sampleRoot) {
     if (!required || !current) return;
     if (current.major !== required.major) {
       console.log();
-      console.log(chalk.yellow(`This sample suggests Node ${nvmrc} (from .nvmrc).`));
-      console.log(chalk.yellow(`Your current Node is ${process.version}.`));
+      console.log(chalk.yellowBright(`This sample suggests Node ${nvmrc} (from .nvmrc).`));
+      console.log(chalk.yellowBright(`Your current Node is ${process.version}.`));
       try {
         const dm = await detectVersionManagers_default();
         const choices = [];
-        if (dm.nvmPosix) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
-        if (dm.nvmWindows) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
-        if (dm.nvs) choices.push(`${chalk.yellow("nvs")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
+        if (dm.nvmPosix) choices.push(`${chalk.cyan.bold("nvm")} ${chalk.white("use")} ${chalk.blueBright(nvmrc)}`);
+        if (dm.nvmWindows) choices.push(`${chalk.cyan.bold("nvm")} ${chalk.white("use")} ${chalk.blueBright(nvmrc)}`);
+        if (dm.nvs) choices.push(`${chalk.cyan.bold("nvs")} ${chalk.white("use")} ${chalk.blueBright(nvmrc)}`);
         if (choices.length === 0) {
-          console.log(chalk.yellow("Consider installing a Node version manager such as nvm, nvm-windows, or nvs."));
+          console.log(chalk.yellowBright("Consider installing a Node version manager such as nvm, nvm-windows, or nvs."));
         }
         if (choices.length > 0) {
           console.log();
-          console.log(chalk.yellow("You can switch to the required Node version with:"));
+          console.log(chalk.yellowBright("You can switch to the required Node version with:"));
         }
         if (choices.length === 1) {
           console.log(`  ${choices[0]}`);
         } else if (choices.length > 1) {
           console.log(`  ${choices[0]}`);
           for (let i = 1; i < choices.length; i++) {
-            console.log(chalk.yellow("or:"));
+            console.log(chalk.yellowBright("or:"));
             console.log(`  ${choices[i]}`);
           }
         }
         console.log();
-        console.log(chalk.yellow("Then:"));
+        console.log(chalk.yellowBright("Then:"));
       } catch {
       }
     }
@@ -541,32 +548,32 @@ async function maybePrintNvmrcAdvice(sampleRoot) {
     }
     if (bestEntry && bestEntry.node) {
       console.log();
-      console.log(chalk.yellow(`\u26A0\uFE0F This sample appears to use SharePoint Framework ${best.sem.major}.${best.sem.minor}.${best.sem.patch} (detected from ${best.pkg}).`));
-      console.log(chalk.yellow(`A suitable Node version is ${bestEntry.node}. See http://aka.ms/spfx-matrix for details.`));
+      console.log(chalk.yellowBright(`\u26A0\uFE0F This sample appears to use SharePoint Framework ${best.sem.major}.${best.sem.minor}.${best.sem.patch} (detected from ${best.pkg}).`));
+      console.log(chalk.yellowBright(`A suitable Node version is ${bestEntry.node}. See http://aka.ms/spfx-matrix for details.`));
       try {
         const current = getCurrentNodeVersion();
         const recMatch = String(bestEntry.node).match(/v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
         const recSem = recMatch ? { major: Number(recMatch[1]), minor: Number(recMatch[2] || 0), patch: Number(recMatch[3] || 0) } : null;
         if (current && recSem && current.major !== recSem.major) {
           console.log();
-          console.log(chalk.yellow(`Your current Node is ${process.version}.`));
+          console.log(chalk.yellowBright(`Your current Node is ${process.version}.`));
           const dm = await detectVersionManagers_default();
           const choices = [];
           const useVer = recMatch ? `${recSem.major}${recSem.minor ? `.${recSem.minor}` : ""}${recSem.patch ? `.${recSem.patch}` : ""}` : String(bestEntry.node);
-          if (dm.nvmPosix) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(useVer)}`);
-          if (dm.nvmWindows) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(useVer)}`);
-          if (dm.nvs) choices.push(`${chalk.yellow("nvs")} ${chalk.white("use")} ${chalk.white(useVer)}`);
+          if (dm.nvmPosix) choices.push(`${chalk.cyan.bold("nvm")} ${chalk.white("use")} ${chalk.blueBright(useVer)}`);
+          if (dm.nvmWindows) choices.push(`${chalk.cyan.bold("nvm")} ${chalk.white("use")} ${chalk.blueBright(useVer)}`);
+          if (dm.nvs) choices.push(`${chalk.cyan.bold("nvs")} ${chalk.white("use")} ${chalk.blueBright(useVer)}`);
           if (choices.length === 0) {
-            console.log(chalk.yellow("Consider installing a Node version manager such as nvm, nvm-windows, or nvs."));
+            console.log(chalk.yellowBright("Consider installing a Node version manager such as nvm, nvm-windows, or nvs."));
           } else {
             console.log();
-            console.log(chalk.yellow("You can switch to the recommended Node version with:"));
+            console.log(chalk.yellowBright("You can switch to the recommended Node version with:"));
             for (let i = 0; i < choices.length; i++) {
-              if (i > 0) console.log(chalk.yellow("or:"));
+              if (i > 0) console.log(chalk.yellowBright("or:"));
               console.log(`  ${choices[i]}`);
             }
             console.log();
-            console.log(chalk.yellow("Then:"));
+            console.log(chalk.yellowBright("Then:"));
           }
         }
       } catch {
@@ -647,32 +654,32 @@ async function getSpfxMatrix() {
 }
 async function finalizeExtraction(opts) {
   const { spinner, successMessage, projectPath, repoRoot } = opts;
-  spinner && spinner.succeed(successMessage);
+  spinner && spinner.succeed(successMessage.replace(/\u001b\[[0-9;]*m/g, ""));
   console.log();
-  console.log(chalk.green("Next steps:"));
-  console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${projectPath}"`)} `);
+  console.log(chalk.green.bold("Next steps:"));
+  console.log(`  ${chalk.cyan.bold("cd")} ${chalk.blueBright(`"${projectPath}"`)} `);
   if (typeof process.env.SPFX_SAMPLE_DEBUG !== "undefined") console.error("[spfx-debug] calling maybePrintNvmrcAdvice for: " + projectPath);
   await maybePrintNvmrcAdvice(projectPath);
-  console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
-  console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
+  console.log(chalk.white(`  ${chalk.cyan.bold("npm")} ${chalk.white("i")}`));
+  console.log(chalk.white(`  ${chalk.cyan.bold("npm")} ${chalk.white("run build")}`));
   try {
     const serve = await detectServeCommand_default(projectPath);
-    console.log(chalk.white(`  ${chalk.yellow(serve.cmd)} ${chalk.white(serve.args?.join(" ") ?? "")}`));
+    console.log(chalk.white(`  ${chalk.cyan.bold(serve.cmd)} ${chalk.white(serve.args?.join(" ") ?? "")}`));
   } catch {
-    console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run serve")}`));
+    console.log(chalk.white(`  ${chalk.cyan.bold("npm")} ${chalk.white("run serve")}`));
   }
   if (repoRoot) {
     console.log();
-    console.log(chalk.green("Contribute back:"));
-    console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${repoRoot}"`)} `);
-    console.log(chalk.white(`  ${chalk.yellow("git")} ${chalk.white("status")}`));
-    console.log(chalk.white(`  ${chalk.yellow("git")} ${chalk.white("checkout")} ${chalk.gray("-b")} ${chalk.white("my-change")}`));
+    console.log(chalk.green.bold("Contribute back:"));
+    console.log(`  ${chalk.cyan.bold("cd")} ${chalk.blueBright(`"${repoRoot}"`)} `);
+    console.log(chalk.white(`  ${chalk.cyan.bold("git")} ${chalk.white("status")}`));
+    console.log(chalk.white(`  ${chalk.cyan.bold("git")} ${chalk.white("checkout")} ${chalk.gray("-b")} ${chalk.white("my-change")}`));
   }
 }
 function assertMode(m) {
   if (!m) return "extract";
   if (m === "extract" || m === "repo") return m;
-  throw new Error(`Invalid --mode "${m}". Use "extract" or "repo".`);
+  throw new Error(`Invalid ${fmt.flag("--mode")} "${m}". Use "extract" or "repo".`);
 }
 function isGuid(v) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
@@ -745,7 +752,7 @@ async function postProcessProject(projectPath, options, spinner) {
     if (typeof options.newid === "string") {
       const v = options.newid.trim();
       if (!isGuid(v)) {
-        throw new Error(`--newid must be a GUID (or omit the value to auto-generate one). Received: ${v}`);
+        throw new Error(`${fmt.flag("--newid")} must be a GUID (or omit the value to auto-generate one). Received: ${v}`);
       }
       newId = v;
     } else {
@@ -776,7 +783,7 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
   try {
     mode = assertMode(options.mode);
   } catch (e) {
-    console.error(chalk.red(e.message));
+    console.error(chalk.red.bold(e.message));
     process.exitCode = 1;
     return;
   }
@@ -784,7 +791,7 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
   try {
     method = assertMethod(options.method);
   } catch (e) {
-    console.error(chalk.red(e.message));
+    console.error(chalk.red.bold(e.message));
     process.exitCode = 1;
     return;
   }
@@ -804,7 +811,7 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
     }
   }
   if (chosen === "api" && mode === "repo") {
-    console.error(chalk.red(`--mode repo requires --method git (API method cannot create a git working repo).`));
+    console.error(chalk.red.bold(`${fmt.flag("--mode")} repo requires ${fmt.flag("--method")} git (API method cannot create a git working repo).`));
     process.exitCode = 1;
     return;
   }
@@ -813,8 +820,8 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
       const nonEmpty = await isDirNonEmpty(destDir);
       if (nonEmpty) {
         console.error(
-          chalk.red(`\u{1F6D1} Destination folder is not empty: ${destDir}
-`) + chalk.yellow(`Use --force to overwrite (or specify a different destination with --dest).`)
+          chalk.red.bold(`\u{1F6D1} Destination folder is not empty: ${destDir}
+`) + chalk.yellowBright(`Use ${fmt.flag("--force")} to overwrite (or specify a different destination with ${fmt.flag("--dest")}).`)
         );
         process.exitCode = 1;
         return;
@@ -824,8 +831,8 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
         await fs2.rm(destDir, { recursive: true, force: true });
       } catch (e) {
         if (e && (e.code === "EBUSY" || e.code === "EPERM")) {
-          console.error(chalk.red(`\u{1F6D1} Destination folder is in use or locked: ${destDir}`));
-          console.error(chalk.yellow(`Close any programs (VS Code, terminals) using the folder and try again.`));
+          console.error(chalk.red.bold(`\u{1F6D1} Destination folder is in use or locked: ${destDir}`));
+          console.error(chalk.yellowBright(`Close any programs (VS Code, terminals) using the folder and try again.`));
           process.exitCode = 1;
           return;
         }
@@ -974,7 +981,7 @@ async function getCommandHandler(sample, options, deps) {
     await ensureGitFn(verbose);
   }
   if (chosen === "api" && mode === "repo") {
-    throw new Error(`--mode repo requires --method git (API method cannot create a git working repo).`);
+    throw new Error(`${fmt.flag("--mode")} repo requires ${fmt.flag("--method")} git (API method cannot create a git working repo).`);
   }
   if (await pathExists(destDir)) {
     if (!options.force) {
