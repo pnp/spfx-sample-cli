@@ -198,6 +198,7 @@ async function detectServeCommand(projectDir) {
 var detectServeCommand_default = detectServeCommand;
 
 // src/cli.ts
+import https from "https";
 var DEFAULT_OWNER = "pnp";
 var DEFAULT_REPO = "sp-dev-fx-webparts";
 var DEFAULT_REF = "main";
@@ -385,11 +386,6 @@ function parseNodeVersion(v) {
   if (parts.some((n) => Number.isNaN(n))) return null;
   return { major: parts[0] || 0, minor: parts[1] || 0, patch: parts[2] || 0 };
 }
-function nodeVersionGte(a, b) {
-  if (a.major !== b.major) return a.major > b.major;
-  if (a.minor !== b.minor) return a.minor > b.minor;
-  return a.patch >= b.patch;
-}
 function getCurrentNodeVersion() {
   const v = process.version.replace(/^v/, "");
   const parts = v.split(".").map((p) => Number(p));
@@ -398,41 +394,256 @@ function getCurrentNodeVersion() {
 }
 async function maybePrintNvmrcAdvice(sampleRoot) {
   const nvmrc = await readNvmrc(sampleRoot);
-  if (!nvmrc) return;
-  const required = parseNodeVersion(nvmrc);
-  const current = getCurrentNodeVersion();
-  if (!required || !current) return;
-  if (!nodeVersionGte(current, required)) {
-    console.log();
-    console.log(chalk.yellow(`This sample suggests Node ${nvmrc} (from .nvmrc).`));
-    console.log(chalk.yellow(`Your current Node is ${process.version}.`));
-    try {
-      const dm = await detectVersionManagers_default();
-      const choices = [];
-      if (dm.nvmPosix) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
-      if (dm.nvmWindows) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
-      if (dm.nvs) choices.push(`${chalk.yellow("nvs")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
-      if (choices.length === 0) {
-        console.log(chalk.yellow("Consider installing a Node version manager such as nvm, nvm-windows, or nvs."));
-      }
-      if (choices.length > 0) {
+  const debug = typeof process.env.SPFX_SAMPLE_DEBUG !== "undefined";
+  const dbg = (msg) => {
+    if (debug) console.error("[spfx-debug]", msg);
+  };
+  if (debug) console.error("[spfx-debug] maybePrintNvmrcAdvice invoked for: " + sampleRoot);
+  if (nvmrc) {
+    dbg(`.nvmrc found: ${nvmrc}`);
+    const required = parseNodeVersion(nvmrc);
+    const current = getCurrentNodeVersion();
+    if (!required || !current) return;
+    if (current.major !== required.major) {
+      console.log();
+      console.log(chalk.yellow(`This sample suggests Node ${nvmrc} (from .nvmrc).`));
+      console.log(chalk.yellow(`Your current Node is ${process.version}.`));
+      try {
+        const dm = await detectVersionManagers_default();
+        const choices = [];
+        if (dm.nvmPosix) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
+        if (dm.nvmWindows) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
+        if (dm.nvs) choices.push(`${chalk.yellow("nvs")} ${chalk.white("use")} ${chalk.white(nvmrc)}`);
+        if (choices.length === 0) {
+          console.log(chalk.yellow("Consider installing a Node version manager such as nvm, nvm-windows, or nvs."));
+        }
+        if (choices.length > 0) {
+          console.log();
+          console.log(chalk.yellow("You can switch to the required Node version with:"));
+        }
+        if (choices.length === 1) {
+          console.log(`  ${choices[0]}`);
+        } else if (choices.length > 1) {
+          console.log(`  ${choices[0]}`);
+          for (let i = 1; i < choices.length; i++) {
+            console.log(chalk.yellow("or:"));
+            console.log(`  ${choices[i]}`);
+          }
+        }
         console.log();
-        console.log(chalk.yellow("You can switch to the required Node version with:"));
+        console.log(chalk.yellow("Then:"));
+      } catch {
       }
-      if (choices.length === 1) {
-        console.log(`  ${choices[0]}`);
-      } else if (choices.length > 1) {
-        console.log(`  ${choices[0]}`);
-        for (let i = 1; i < choices.length; i++) {
-          console.log(chalk.yellow("or:"));
-          console.log(`  ${choices[i]}`);
+    }
+    return;
+  }
+  try {
+    let parseSemverLoose2 = function(s) {
+      if (!s) return null;
+      const cleaned = s.trim().replace(/^[^0-9]*/, "").replace(/[^0-9.].*$/, "");
+      const parts = cleaned.split(".").map((p) => Number(p || 0));
+      if (parts.some((n) => Number.isNaN(n))) return null;
+      return { major: parts[0] || 0, minor: parts[1] || 0, patch: parts[2] || 0 };
+    }, pickHighest2 = function(list) {
+      let b = null;
+      for (const v of list) {
+        const sem = parseSemverLoose2(v.ver);
+        if (!sem) continue;
+        if (!b) b = { pkg: v.pkg, ver: v.ver, sem };
+        else {
+          if (sem.major > b.sem.major || sem.major === b.sem.major && (sem.minor > b.sem.minor || sem.minor === b.sem.minor && sem.patch > b.sem.patch)) {
+            b = { pkg: v.pkg, ver: v.ver, sem };
+          }
         }
       }
+      return b;
+    }, semKey2 = function(s) {
+      const m = s.replace(/^[^0-9]*/, "").match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+      if (!m) return null;
+      return { major: Number(m[1]), minor: Number(m[2] || 0), patch: Number(m[3] || 0) };
+    };
+    var parseSemverLoose = parseSemverLoose2, pickHighest = pickHighest2, semKey = semKey2;
+    const pkg = await readJsonIfExists(path4.join(sampleRoot, "package.json"));
+    if (!pkg) {
+      dbg("no package.json found");
+      return;
+    }
+    const deps = { ...pkg.dependencies || {}, ...pkg.devDependencies || {} };
+    dbg(`found ${Object.keys(deps).length} deps`);
+    const spfxPkgs = Object.keys(deps).filter((k) => k.startsWith("@microsoft/sp-"));
+    const versions = [];
+    for (const p of spfxPkgs) {
+      const raw = deps[p];
+      if (typeof raw === "string") {
+        versions.push({ pkg: p, ver: raw });
+      }
+    }
+    if (versions.length === 0) {
+      dbg("no @microsoft/sp- packages found");
+      return;
+    }
+    const preferredOrder = ["@microsoft/sp-webpart-base", "@microsoft/sp-core-library", "@microsoft/sp-module-interfaces"];
+    let best = null;
+    const preferredCandidates = versions.filter((v) => preferredOrder.includes(v.pkg));
+    if (preferredCandidates.length > 0) {
+      best = pickHighest2(preferredCandidates);
+    }
+    if (!best) {
+      best = pickHighest2(versions);
+    }
+    if (!best || !best.sem) {
+      dbg("could not parse semver from spfx packages");
+      return;
+    }
+    const matrixUrl = "https://github.com/SharePoint/sp-dev-docs/raw/main/assets/spfx/spfx-matrix.json";
+    const matrix = await fetchJsonUrl(matrixUrl);
+    if (!matrix) {
+      dbg("could not fetch or parse spfx matrix");
+      return;
+    }
+    const entries = [];
+    if (Array.isArray(matrix)) {
+      for (const e of matrix) {
+        if (!e) continue;
+        const sp = e.spfx || e.spfxVersion || e.version;
+        const node = e.node || e.nodeVersion || (Array.isArray(e.nodeVersions) ? e.nodeVersions[0] : void 0) || e.recommendedNode;
+        if (sp) entries.push({ spfx: String(sp), node: node ? String(node) : void 0 });
+      }
+    } else if (typeof matrix === "object") {
+      for (const k of Object.keys(matrix)) {
+        const val = matrix[k];
+        if (val && typeof val === "object") {
+          const node = val.node || val.nodeVersion || (Array.isArray(val.nodeVersions) ? val.nodeVersions[0] : void 0) || val.recommendedNode;
+          entries.push({ spfx: k, node: node ? String(node) : void 0 });
+        } else if (typeof val === "string") {
+          entries.push({ spfx: k, node: val });
+        }
+      }
+    }
+    if (entries.length === 0) {
+      dbg("no entries parsed from matrix");
+      return;
+    }
+    let bestEntry = null;
+    let bestScore = Number.MAX_SAFE_INTEGER;
+    for (const e of entries) {
+      const sem = semKey2(e.spfx);
+      if (!sem) continue;
+      if (sem.major === best.sem.major && sem.minor === best.sem.minor && sem.patch === best.sem.patch) {
+        bestEntry = e;
+        break;
+      }
+      const score = Math.abs(sem.major - best.sem.major) * 1e4 + Math.abs(sem.minor - best.sem.minor) * 100 + Math.abs(sem.patch - best.sem.patch);
+      if (score < bestScore) {
+        bestScore = score;
+        bestEntry = e;
+      }
+    }
+    if (bestEntry && bestEntry.node) {
       console.log();
-      console.log(chalk.yellow("Then:"));
+      console.log(chalk.yellow(`\u26A0\uFE0F This sample appears to use SharePoint Framework ${best.sem.major}.${best.sem.minor}.${best.sem.patch} (detected from ${best.pkg}).`));
+      console.log(chalk.yellow(`A suitable Node version is ${bestEntry.node}. See http://aka.ms/spfx-matrix for details.`));
+      try {
+        const current = getCurrentNodeVersion();
+        const recMatch = String(bestEntry.node).match(/v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+        const recSem = recMatch ? { major: Number(recMatch[1]), minor: Number(recMatch[2] || 0), patch: Number(recMatch[3] || 0) } : null;
+        if (current && recSem && current.major !== recSem.major) {
+          console.log();
+          console.log(chalk.yellow(`Your current Node is ${process.version}.`));
+          const dm = await detectVersionManagers_default();
+          const choices = [];
+          const useVer = recMatch ? `${recSem.major}${recSem.minor ? `.${recSem.minor}` : ""}${recSem.patch ? `.${recSem.patch}` : ""}` : String(bestEntry.node);
+          if (dm.nvmPosix) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(useVer)}`);
+          if (dm.nvmWindows) choices.push(`${chalk.yellow("nvm")} ${chalk.white("use")} ${chalk.white(useVer)}`);
+          if (dm.nvs) choices.push(`${chalk.yellow("nvs")} ${chalk.white("use")} ${chalk.white(useVer)}`);
+          if (choices.length === 0) {
+            console.log(chalk.yellow("Consider installing a Node version manager such as nvm, nvm-windows, or nvs."));
+          } else {
+            console.log();
+            console.log(chalk.yellow("You can switch to the recommended Node version with:"));
+            for (let i = 0; i < choices.length; i++) {
+              if (i > 0) console.log(chalk.yellow("or:"));
+              console.log(`  ${choices[i]}`);
+            }
+            console.log();
+            console.log(chalk.yellow("Then:"));
+          }
+        }
+      } catch {
+      }
+    }
+  } catch {
+  }
+}
+async function fetchJsonUrl(url) {
+  const maxRedirects = 5;
+  return new Promise((resolve) => {
+    let redirects = 0;
+    const doGet = (u) => {
+      try {
+        const req = https.get(u, (res) => {
+          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            if (redirects++ < maxRedirects) {
+              const loc = res.headers.location.startsWith("http") ? res.headers.location : new URL(res.headers.location, u).toString();
+              res.resume();
+              doGet(loc);
+              return;
+            }
+            resolve(null);
+            res.resume();
+            return;
+          }
+          if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+            resolve(null);
+            res.resume();
+            return;
+          }
+          const chunks = [];
+          res.on("data", (d) => chunks.push(Buffer.isBuffer(d) ? d : Buffer.from(String(d))));
+          res.on("end", () => {
+            try {
+              const txt = Buffer.concat(chunks).toString("utf8");
+              const j = JSON.parse(txt);
+              resolve(j);
+            } catch {
+              resolve(null);
+            }
+          });
+        });
+        req.on("error", () => resolve(null));
+        req.setTimeout(5e3, () => {
+          req.destroy();
+          resolve(null);
+        });
+      } catch {
+        resolve(null);
+      }
+    };
+    doGet(url);
+  });
+}
+async function getSpfxMatrix() {
+  const cacheDir = path4.join(os2.tmpdir(), "spfx-sample-cli");
+  const cacheFile = path4.join(cacheDir, "spfx-matrix.json");
+  const ttlMs = 1e3 * 60 * 60 * 24;
+  try {
+    const st = await fs2.stat(cacheFile).catch(() => null);
+    if (st && Date.now() - st.mtimeMs < ttlMs) {
+      const txt = await fs2.readFile(cacheFile, "utf8").catch(() => null);
+      if (txt) return JSON.parse(txt);
+    }
+  } catch {
+  }
+  const url = "https://raw.githubusercontent.com/SharePoint/sp-dev-docs/main/assets/spfx/spfx-matrix.json";
+  const j = await fetchJsonUrl(url);
+  if (j) {
+    try {
+      await fs2.mkdir(cacheDir, { recursive: true });
+      await fs2.writeFile(cacheFile, JSON.stringify(j, null, 2), "utf8");
     } catch {
     }
   }
+  return j;
 }
 async function finalizeExtraction(opts) {
   const { spinner, successMessage, projectPath, repoRoot } = opts;
@@ -440,6 +651,7 @@ async function finalizeExtraction(opts) {
   console.log();
   console.log(chalk.green("Next steps:"));
   console.log(`  ${chalk.yellow("cd")} ${chalk.blue(`"${projectPath}"`)} `);
+  if (typeof process.env.SPFX_SAMPLE_DEBUG !== "undefined") console.error("[spfx-debug] calling maybePrintNvmrcAdvice for: " + projectPath);
   await maybePrintNvmrcAdvice(projectPath);
   console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("i")}`));
   console.log(chalk.white(`  ${chalk.yellow("npm")} ${chalk.white("run build")}`));
@@ -601,14 +813,24 @@ program.command("get").argument("<sample>", "Sample folder name, e.g. react-hell
       const nonEmpty = await isDirNonEmpty(destDir);
       if (nonEmpty) {
         console.error(
-          chalk.red(`Destination exists and is not empty: ${destDir}
-`) + chalk.yellow(`Use --force to overwrite (or choose --dest).`)
+          chalk.red(`\u{1F6D1} Destination folder is not empty: ${destDir}
+`) + chalk.yellow(`Use --force to overwrite (or specify a different destination with --dest).`)
         );
         process.exitCode = 1;
         return;
       }
     } else {
-      await fs2.rm(destDir, { recursive: true, force: true });
+      try {
+        await fs2.rm(destDir, { recursive: true, force: true });
+      } catch (e) {
+        if (e && (e.code === "EBUSY" || e.code === "EPERM")) {
+          console.error(chalk.red(`\u{1F6D1} Destination folder is in use or locked: ${destDir}`));
+          console.error(chalk.yellow(`Close any programs (VS Code, terminals) using the folder and try again.`));
+          process.exitCode = 1;
+          return;
+        }
+        throw e;
+      }
     }
   }
   const spinner = ora(`Getting sample ${sampleFolder} from ${owner}/${repo}@${ref}\u2026`).start();
@@ -759,7 +981,14 @@ async function getCommandHandler(sample, options, deps) {
       const nonEmpty = await isDirNonEmpty(destDir);
       if (nonEmpty) throw new Error(`Destination exists and is not empty: ${destDir}`);
     } else {
-      await fs2.rm(destDir, { recursive: true, force: true });
+      try {
+        await fs2.rm(destDir, { recursive: true, force: true });
+      } catch (e) {
+        if (e && (e.code === "EBUSY" || e.code === "EPERM")) {
+          throw new Error(`Destination folder is in use or locked: ${destDir}`);
+        }
+        throw e;
+      }
     }
   }
   if (chosen === "api") {
@@ -814,8 +1043,11 @@ if (process.env.NODE_ENV !== "test") {
 export {
   assertMethod,
   assertMode,
+  fetchJsonUrl,
   getCommandHandler,
+  getSpfxMatrix,
   isGuid,
+  maybePrintNvmrcAdvice,
   normalizeSampleArg,
   parseGitVersion,
   postProcessProject,
